@@ -5,7 +5,9 @@ import { FileSpreadsheet, RefreshCw, AlertCircle } from 'lucide-react';
 import { cn } from './lib/utils';
 
 export default function App() {
-  const [webAppUrl, setWebAppUrl] = useState(WEB_APP_URL_DEFAULT);
+  const [webAppUrl, setWebAppUrl] = useState(() => {
+    return localStorage.getItem('deadline_webapp_url') || WEB_APP_URL_DEFAULT;
+  });
   const [sheetName, setSheetName] = useState('');
   const [records, setRecords] = useState<SheetRecord[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -30,6 +32,7 @@ export default function App() {
       if (err) {
         setError(err);
       } else {
+        localStorage.setItem('deadline_webapp_url', url);
         setRecords(data);
         setSheetName(sName);
       }
