@@ -53,7 +53,7 @@ export default function App() {
               <FileSpreadsheet className="w-5 h-5" />
             </div>
             <div>
-              <h1 className="text-lg font-bold text-slate-900 leading-tight">Quản Lý Hồ Sơ</h1>
+              <h1 className="text-lg font-bold text-slate-900 leading-tight">Deadline</h1>
               <p className="text-xs text-slate-500 font-medium">Đồng bộ 2 chiều Google Sheets qua Apps Script</p>
             </div>
           </div>
