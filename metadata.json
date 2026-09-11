@@ -1,6 +1,6 @@
 {
-  "name": "",
-  "description": "",
+  "name": "Quản Lý Hồ Sơ",
+  "description": "Ứng dụng quản lý và nhắc hạn hồ sơ",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

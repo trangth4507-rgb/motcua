@@ -11,114 +11,70 @@ export interface SheetRecord {
   traThucTe: string;
 }
 
-export const SHEET_ID_DEFAULT = '16Tr4_mm6hd0Szzhm2-T91P6QHWJ9lgoY_AQUjZ8ZvLk';
+// Remove default SHEET_ID and replace it with Web App URL
+export const WEB_APP_URL_DEFAULT = ''; // User will enter their Apps Script URL
 
 export async function fetchSheetData(
-  accessToken: string,
-  spreadsheetId: string
+  webAppUrl: string
 ): Promise<{ records: SheetRecord[]; sheetName: string; error?: string }> {
   try {
-    // 1. Get spreadsheet metadata to find the first sheet's name
-    const metaRes = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets.properties.title`,
-      {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      }
-    );
-    if (!metaRes.ok) {
-      const errData = await metaRes.json();
-      throw new Error(errData.error?.message || 'Failed to fetch spreadsheet metadata');
-    }
-    const metaData = await metaRes.json();
-    const sheetName = metaData.sheets[0].properties.title;
-
-    // 2. Fetch the data from the first sheet
-    const dataRes = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/'${sheetName}'!A:U`,
-      {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      }
-    );
-    
-    if (!dataRes.ok) {
-      const errData = await dataRes.json();
-      throw new Error(errData.error?.message || 'Failed to fetch spreadsheet data');
-    }
-    
-    const data = await dataRes.json();
-    const rows = data.values || [];
-    
-    // Skip header row (index 0)
-    const records: SheetRecord[] = [];
-    for (let i = 1; i < rows.length; i++) {
-      const row = rows[i];
-      // Yellow columns to extract:
-      // 2: SỐ HỒ SƠ
-      // 3: QUY TRÌNH
-      // 5: TÊN ĐƠN VỊ/HỌ TÊN
-      // 10: CƠ QUAN XỬ LÝ
-      // 11: CÁN BỘ XỬ LÝ
-      // 14: NGÀY NHẬN
-      // 15: NGÀY TRẢ
-      // 16: TRẢ THỰC TẾ
-      
-      // We only care about rows that have some meaningful data
-      if (!row[2] && !row[5]) continue;
-
-      records.push({
-        rowIndex: i + 1, // 1-based index for A1 notation
-        stt: row[0] || '',
-        soHoSo: row[2] || '',
-        quyTrinh: row[3] || '',
-        tenDonVi: row[5] || '',
-        coQuanXuLy: row[10] || '',
-        canBoXuLy: row[11] || '',
-        ngayNhan: row[14] || '',
-        ngayTra: row[15] || '',
-        traThucTe: row[16] || '',
-      });
+    if (!webAppUrl) {
+      throw new Error("Vui lòng nhập Web App URL của Apps Script");
     }
 
-    return { records, sheetName };
+    const res = await fetch(webAppUrl);
+    
+    if (!res.ok) {
+      throw new Error('Không thể kết nối đến Web App. Vui lòng kiểm tra lại URL.');
+    }
+    
+    const data = await res.json();
+    
+    if (data.status === 'error') {
+      throw new Error(data.message || 'Lỗi từ Apps Script');
+    }
+
+    // Apps Script now returns the records directly structured
+    const records: SheetRecord[] = data.data || [];
+
+    return { records, sheetName: 'Sheet dữ liệu' }; // Web App abstracts the sheet name
   } catch (error: any) {
     console.error('fetchSheetData error:', error);
     return { records: [], sheetName: '', error: error.message };
   }
 }
 
-// Write the current timestamp to "TRẢ THỰC TẾ" (Column Q)
 export async function markRecordCompleted(
-  accessToken: string,
-  spreadsheetId: string,
-  sheetName: string,
+  webAppUrl: string,
   rowIndex: number,
   timestampStr: string
 ): Promise<boolean> {
   try {
-    // Column Q is index 16. In A1 notation: Q + rowIndex
-    const range = `'${sheetName}'!Q${rowIndex}`;
-    
-    const res = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${range}?valueInputOption=USER_ENTERED`,
-      {
-        method: 'PUT',
+     if (!webAppUrl) {
+      throw new Error("Vui lòng nhập Web App URL của Apps Script");
+    }
+
+    const res = await fetch(webAppUrl, {
+        method: 'POST',
         headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
+            'Content-Type': 'text/plain;charset=utf-8', // Important for Apps Script POST
         },
         body: JSON.stringify({
-          range,
-          majorDimension: 'ROWS',
-          values: [[timestampStr]],
-        }),
-      }
-    );
+            rowIndex: rowIndex,
+            timestamp: timestampStr
+        })
+    });
 
     if (!res.ok) {
-      const errData = await res.json();
-      throw new Error(errData.error?.message || 'Failed to update sheet');
+      throw new Error('Failed to update sheet via Web App');
     }
     
+    const data = await res.json();
+    
+    if (data.status === 'error') {
+       throw new Error(data.message || 'Lỗi khi cập nhật từ Apps Script');
+    }
+
     return true;
   } catch (error) {
     console.error('markRecordCompleted error:', error);

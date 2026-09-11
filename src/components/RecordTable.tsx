@@ -12,17 +12,13 @@ import { Check, CheckCircle2, Clock, AlertTriangle } from 'lucide-react';
 
 interface RecordTableProps {
   records: SheetRecord[];
-  accessToken: string;
-  spreadsheetId: string;
-  sheetName: string;
+  webAppUrl: string;
   onRefresh: () => void;
 }
 
 export function RecordTable({
   records,
-  accessToken,
-  spreadsheetId,
-  sheetName,
+  webAppUrl,
   onRefresh,
 }: RecordTableProps) {
   const [now, setNow] = useState(new Date());
@@ -85,9 +81,7 @@ export function RecordTable({
     const timestampStr = getCurrentDateStr();
 
     const success = await markRecordCompleted(
-      accessToken,
-      spreadsheetId,
-      sheetName,
+      webAppUrl,
       record.rowIndex,
       timestampStr
     );
@@ -101,7 +95,7 @@ export function RecordTable({
     if (success) {
       onRefresh();
     } else {
-      alert('Có lỗi xảy ra khi cập nhật Google Sheet.');
+      alert('Có lỗi xảy ra khi cập nhật Google Sheet qua Apps Script.');
     }
   };
 
