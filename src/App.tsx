@@ -127,6 +127,12 @@ export default function App() {
                     Toàn cảnh (Full Landscape)
                   </span>
                 )}
+                <span className="hidden sm:inline-flex text-[10px] font-semibold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-300">
+                  Tích chọn hàng loạt: SẴN SÀNG
+                </span>
+                <span className="hidden lg:inline-flex text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-50 text-amber-900 border border-amber-300">
+                  ⚡ Sắp đến hạn gần nhất: Lên đầu
+                </span>
               </div>
               <p className="text-xs text-slate-500 font-medium">
                 Theo dõi hạn xử lý & nhắc việc hồ sơ

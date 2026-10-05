@@ -24,7 +24,20 @@ import {
   X,
   Loader2,
   ListChecks,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
+  Sparkles,
 } from 'lucide-react';
+
+export type SortOption =
+  | 'upcoming_closest'  // Sắp đến hạn gần nhất (còn ít thời gian nhất lên đầu - MẶC ĐỊNH)
+  | 'closest_to_now'    // Hạn chót sát giờ hiện tại nhất (|hạn - hiện tại| nhỏ nhất)
+  | 'overdue_first'     // Quá hạn & Khẩn cấp lên đầu
+  | 'ngay_tra_asc'      // Hạn trả: Sớm nhất ➔ Muộn nhất
+  | 'ngay_tra_desc'     // Hạn trả: Muộn nhất ➔ Sớm nhất
+  | 'ngay_nhan_desc'    // Ngày nhận: Mới nhất lên đầu
+  | 'stt_asc';          // Thứ tự ban đầu (STT)
 
 interface RecordTableProps {
   records: SheetRecord[];
@@ -50,6 +63,23 @@ export function RecordTable({
   const [selectedBoPhan, setSelectedBoPhan] = useState<string>('all');
   const [selectedMenu, setSelectedMenu] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+
+  // Sorting state - default is 'upcoming_closest' (sắp đến hạn mới nhất, gần nhất đẩy lên đầu)
+  const [sortOption, setSortOption] = useState<SortOption>(() => {
+    const saved = localStorage.getItem('deadline_sort_option');
+    if (
+      saved &&
+      ['upcoming_closest', 'closest_to_now', 'overdue_first', 'ngay_tra_asc', 'ngay_tra_desc', 'ngay_nhan_desc', 'stt_asc'].includes(saved)
+    ) {
+      return saved as SortOption;
+    }
+    return 'upcoming_closest';
+  });
+
+  const handleSortChange = (newSort: SortOption) => {
+    setSortOption(newSort);
+    localStorage.setItem('deadline_sort_option', newSort);
+  };
 
   // Display mode states: default to wrap text (full text display)
   const [isWrapText, setIsWrapText] = useState<boolean>(() => {
@@ -91,6 +121,7 @@ export function RecordTable({
     return records
       .map((record) => {
         const ngayTraDate = parseDate(record.ngayTra);
+        const ngayNhanDate = parseDate(record.ngayNhan);
         const traThucTeDate = parseDate(record.traThucTe);
         const isCompleted = !!record.traThucTe && record.traThucTe.trim().length > 0;
 
@@ -102,6 +133,7 @@ export function RecordTable({
         return {
           ...record,
           ngayTraDate,
+          ngayNhanDate,
           traThucTeDate,
           isCompleted,
           tr,
@@ -110,24 +142,102 @@ export function RecordTable({
         };
       })
       .sort((a, b) => {
-        // Priority 1: Uncompleted before completed
-        if (!a.isCompleted && b.isCompleted) return -1;
-        if (a.isCompleted && !b.isCompleted) return 1;
+        // Priority 1: Uncompleted records ALWAYS come before Completed records (except when sorting strictly by STT)
+        if (sortOption !== 'stt_asc') {
+          if (!a.isCompleted && b.isCompleted) return -1;
+          if (a.isCompleted && !b.isCompleted) return 1;
+        }
 
-        // Priority 2: In uncompleted, overdue first
+        // When comparing two uncompleted records:
         if (!a.isCompleted && !b.isCompleted) {
-          if (a.isOverdue && !b.isOverdue) return -1;
-          if (!a.isOverdue && b.isOverdue) return 1;
+          switch (sortOption) {
+            case 'upcoming_closest': {
+              // 1. Hồ sơ SẮP ĐẾN HẠN (chưa quá hạn, tr.totalSeconds >= 0): ĐẨY LÊN ĐẦU TIÊN
+              // Sắp xếp tăng dần theo thời gian còn lại (còn ít thời gian nhất lên trước: 10 phút -> 1h -> 1 ngày...)
+              if (!a.isOverdue && !b.isOverdue) {
+                const aSec = a.tr ? a.tr.totalSeconds : Number.MAX_SAFE_INTEGER;
+                const bSec = b.tr ? b.tr.totalSeconds : Number.MAX_SAFE_INTEGER;
+                if (aSec !== bSec) return aSec - bSec;
+              }
 
-          // Priority 3: Lowest remaining time first
-          if (a.tr && b.tr) {
-            return a.tr.totalSeconds - b.tr.totalSeconds;
+              // Sắp đến hạn ưu tiên trước quá hạn (Sắp đến hạn mới nhất, gần nhất đẩy lên đầu)
+              if (!a.isOverdue && b.isOverdue) return -1;
+              if (a.isOverdue && !b.isOverdue) return 1;
+
+              // Cả hai đều quá hạn: Hồ sơ vừa mới quá hạn gần đây nhất lên trước
+              // (ví dụ: vừa quá hạn 10 phút lên trước hồ sơ quá hạn 2 tháng)
+              if (a.isOverdue && b.isOverdue) {
+                const aSec = a.tr ? a.tr.totalSeconds : -Number.MAX_SAFE_INTEGER;
+                const bSec = b.tr ? b.tr.totalSeconds : -Number.MAX_SAFE_INTEGER;
+                if (aSec !== bSec) return bSec - aSec;
+              }
+              break;
+            }
+
+            case 'closest_to_now': {
+              // Khoảng cách thời gian ngắn nhất so với hiện tại (|totalSeconds| nhỏ nhất)
+              const aDiff = a.tr ? Math.abs(a.tr.totalSeconds) : Number.MAX_SAFE_INTEGER;
+              const bDiff = b.tr ? Math.abs(b.tr.totalSeconds) : Number.MAX_SAFE_INTEGER;
+              if (aDiff !== bDiff) return aDiff - bDiff;
+              break;
+            }
+
+            case 'overdue_first': {
+              // Quá hạn trước, sau đó đến sắp đến hạn
+              if (a.isOverdue && !b.isOverdue) return -1;
+              if (!a.isOverdue && b.isOverdue) return 1;
+
+              if (a.isOverdue && b.isOverdue) {
+                const aSec = a.tr ? a.tr.totalSeconds : -Number.MAX_SAFE_INTEGER;
+                const bSec = b.tr ? b.tr.totalSeconds : -Number.MAX_SAFE_INTEGER;
+                if (aSec !== bSec) return bSec - aSec;
+              }
+
+              if (!a.isOverdue && !b.isOverdue) {
+                const aSec = a.tr ? a.tr.totalSeconds : Number.MAX_SAFE_INTEGER;
+                const bSec = b.tr ? b.tr.totalSeconds : Number.MAX_SAFE_INTEGER;
+                if (aSec !== bSec) return aSec - bSec;
+              }
+              break;
+            }
+
+            case 'ngay_tra_asc': {
+              const aTime = a.ngayTraDate ? a.ngayTraDate.getTime() : Number.MAX_SAFE_INTEGER;
+              const bTime = b.ngayTraDate ? b.ngayTraDate.getTime() : Number.MAX_SAFE_INTEGER;
+              if (aTime !== bTime) return aTime - bTime;
+              break;
+            }
+
+            case 'ngay_tra_desc': {
+              const aTime = a.ngayTraDate ? a.ngayTraDate.getTime() : -Number.MAX_SAFE_INTEGER;
+              const bTime = b.ngayTraDate ? b.ngayTraDate.getTime() : -Number.MAX_SAFE_INTEGER;
+              if (aTime !== bTime) return bTime - aTime;
+              break;
+            }
+
+            case 'ngay_nhan_desc': {
+              const aTime = a.ngayNhanDate ? a.ngayNhanDate.getTime() : -Number.MAX_SAFE_INTEGER;
+              const bTime = b.ngayNhanDate ? b.ngayNhanDate.getTime() : -Number.MAX_SAFE_INTEGER;
+              if (aTime !== bTime) return bTime - aTime;
+              break;
+            }
+
+            case 'stt_asc':
+            default:
+              return a.rowIndex - b.rowIndex;
+          }
+        }
+
+        // When comparing two completed records:
+        if (a.isCompleted && b.isCompleted) {
+          if (a.traThucTeDate && b.traThucTeDate) {
+            return b.traThucTeDate.getTime() - a.traThucTeDate.getTime();
           }
         }
 
         return a.rowIndex - b.rowIndex;
       });
-  }, [records, now]);
+  }, [records, now, sortOption]);
 
   // Extract unique lists for filtering
   const uniqueBoPhanList = useMemo(() => {
@@ -473,13 +583,33 @@ export function RecordTable({
           {totalUncompletedCount > 0 && (
             <button
               onClick={handleSelectAllUncompleted}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
-              title="Tích chọn toàn bộ các hồ sơ chưa hoàn thành"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-sm transition-colors cursor-pointer"
+              title="Tích chọn toàn bộ các hồ sơ chưa hoàn thành để xử lý cùng lúc"
             >
-              <CheckSquare className="w-3.5 h-3.5 text-emerald-700" />
-              <span>Chọn tất cả chưa xong ({totalUncompletedCount})</span>
+              <CheckSquare className="w-4 h-4 text-white" />
+              <span>Tích chọn tất cả ({totalUncompletedCount})</span>
             </button>
           )}
+
+          {/* Sort Selector Dropdown */}
+          <div className="flex items-center gap-1.5 bg-emerald-50 border border-emerald-300 rounded-lg px-2.5 py-1.5 shadow-2xs">
+            <ArrowUpDown className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+            <span className="text-[11px] font-bold text-emerald-900 hidden sm:inline shrink-0">Sắp xếp:</span>
+            <select
+              value={sortOption}
+              onChange={(e) => handleSortChange(e.target.value as SortOption)}
+              className="bg-transparent border-none text-emerald-950 font-bold focus:outline-none text-xs cursor-pointer max-w-[210px] truncate"
+              title="Tiêu chí sắp xếp danh sách hồ sơ: Sắp đến hạn mới nhất, gần nhất đẩy lên đầu"
+            >
+              <option value="upcoming_closest">⚡ Sắp đến hạn gần nhất (Lên đầu)</option>
+              <option value="closest_to_now">⏱️ Hạn chót sát giờ hiện tại nhất</option>
+              <option value="overdue_first">🚨 Quá hạn & Khẩn cấp lên đầu</option>
+              <option value="ngay_tra_asc">📅 Hạn trả: Sớm nhất ➔ Muộn nhất</option>
+              <option value="ngay_tra_desc">📅 Hạn trả: Muộn nhất ➔ Sớm nhất</option>
+              <option value="ngay_nhan_desc">📥 Ngày nhận: Mới nhất lên đầu</option>
+              <option value="stt_asc">🔢 Thứ tự ban đầu (STT)</option>
+            </select>
+          </div>
 
           {/* Bộ phận hiện tại filter */}
           {uniqueBoPhanList.length > 0 && (
@@ -595,24 +725,33 @@ export function RecordTable({
           <thead className="bg-slate-100/90 text-slate-700 font-semibold border-b border-slate-200 text-xs uppercase tracking-wider sticky top-0 z-10 backdrop-blur-xs">
             <tr>
               {/* Checkbox All column */}
-              <th className="px-3 py-3 w-10 text-center whitespace-nowrap">
-                <input
-                  type="checkbox"
-                  ref={headerCheckboxRef}
-                  checked={isAllInViewSelected}
-                  onChange={toggleSelectAllInView}
-                  disabled={uncompletedInView.length === 0}
-                  className="w-4 h-4 rounded text-emerald-600 border-slate-300 focus:ring-emerald-500 cursor-pointer disabled:opacity-40"
-                  title={
-                    uncompletedInView.length === 0
-                      ? 'Không có hồ sơ nào chưa hoàn thành để chọn'
-                      : isAllInViewSelected
-                      ? 'Bỏ chọn tất cả hồ sơ trong bảng'
-                      : 'Chọn tất cả hồ sơ chưa hoàn thành trong bảng'
-                  }
-                />
+              <th className="px-2 py-3 w-16 text-center whitespace-nowrap bg-emerald-100/90 text-emerald-950 font-bold border-r border-emerald-200">
+                <label className="flex items-center justify-center gap-1.5 cursor-pointer select-none" title="Tích chọn / Bỏ chọn tất cả hồ sơ trong bảng">
+                  <input
+                    type="checkbox"
+                    ref={headerCheckboxRef}
+                    checked={isAllInViewSelected}
+                    onChange={toggleSelectAllInView}
+                    disabled={uncompletedInView.length === 0}
+                    className="w-4 h-4 rounded text-emerald-600 border-slate-300 focus:ring-emerald-500 cursor-pointer disabled:opacity-40 accent-emerald-600"
+                  />
+                  <span className="text-[11px] font-bold text-emerald-900 uppercase">CHỌN</span>
+                </label>
               </th>
-              <th className="px-2.5 py-3 w-10 text-center whitespace-nowrap">STT</th>
+              <th
+                onClick={() => handleSortChange(sortOption === 'stt_asc' ? 'upcoming_closest' : 'stt_asc')}
+                className="px-2.5 py-3 w-10 text-center whitespace-nowrap cursor-pointer hover:bg-slate-200/80 select-none group transition-colors"
+                title="Bấm để sắp xếp theo số thứ tự (STT)"
+              >
+                <div className="flex items-center justify-center gap-0.5">
+                  <span>STT</span>
+                  {sortOption === 'stt_asc' ? (
+                    <ArrowUp className="w-3 h-3 text-emerald-600" />
+                  ) : (
+                    <ArrowUpDown className="w-2.5 h-2.5 text-slate-400 opacity-0 group-hover:opacity-100" />
+                  )}
+                </div>
+              </th>
               <th className="px-3.5 py-3 whitespace-nowrap min-w-[140px]">Số Hồ Sơ</th>
               <th className="px-3.5 py-3 min-w-[200px] xl:min-w-[240px]">Quy Trình</th>
               <th className="px-3.5 py-3 min-w-[160px] xl:min-w-[200px] text-emerald-900 bg-emerald-50/40">
@@ -623,10 +762,73 @@ export function RecordTable({
               </th>
               <th className="px-3.5 py-3 min-w-[180px] xl:min-w-[240px]">Tên Đơn Vị / Họ Tên</th>
               <th className="px-3.5 py-3 min-w-[180px] xl:min-w-[220px]">Cơ Quan / Cán Bộ XL</th>
-              <th className="px-3 py-3 whitespace-nowrap text-center min-w-[105px]">Ngày Nhận</th>
-              <th className="px-3 py-3 whitespace-nowrap text-center min-w-[105px]">Hạn Trả</th>
+              <th
+                onClick={() => handleSortChange(sortOption === 'ngay_nhan_desc' ? 'stt_asc' : 'ngay_nhan_desc')}
+                className="px-3 py-3 whitespace-nowrap text-center min-w-[105px] cursor-pointer hover:bg-slate-200/80 select-none group transition-colors"
+                title="Bấm để sắp xếp theo ngày tiếp nhận mới nhất"
+              >
+                <div className="flex items-center justify-center gap-1">
+                  <span>Ngày Nhận</span>
+                  {sortOption === 'ngay_nhan_desc' ? (
+                    <ArrowDown className="w-3 h-3 text-emerald-600" />
+                  ) : (
+                    <ArrowUpDown className="w-2.5 h-2.5 text-slate-400 opacity-0 group-hover:opacity-100" />
+                  )}
+                </div>
+              </th>
+              <th
+                onClick={() =>
+                  handleSortChange(sortOption === 'ngay_tra_asc' ? 'ngay_tra_desc' : 'ngay_tra_asc')
+                }
+                className={cn(
+                  'px-3 py-3 whitespace-nowrap text-center min-w-[105px] cursor-pointer select-none group transition-colors',
+                  sortOption.startsWith('ngay_tra') ? 'bg-emerald-50 text-emerald-900 font-bold' : 'hover:bg-slate-200/80'
+                )}
+                title="Bấm để sắp xếp theo Hạn trả (Sớm nhất ➔ Muộn nhất / Ngược lại)"
+              >
+                <div className="flex items-center justify-center gap-1">
+                  <span>Hạn Trả</span>
+                  {sortOption === 'ngay_tra_asc' ? (
+                    <ArrowUp className="w-3 h-3 text-emerald-600" />
+                  ) : sortOption === 'ngay_tra_desc' ? (
+                    <ArrowDown className="w-3 h-3 text-emerald-600" />
+                  ) : (
+                    <ArrowUpDown className="w-2.5 h-2.5 text-slate-400 opacity-0 group-hover:opacity-100" />
+                  )}
+                </div>
+              </th>
               <th className="px-3 py-3 whitespace-nowrap text-center min-w-[105px]">Trả Thực Tế</th>
-              <th className="px-3.5 py-3 whitespace-nowrap min-w-[165px]">Thời Gian Còn Lại</th>
+              <th
+                onClick={() =>
+                  handleSortChange(
+                    sortOption === 'upcoming_closest' ? 'overdue_first' : 'upcoming_closest'
+                  )
+                }
+                className={cn(
+                  'px-3.5 py-3 whitespace-nowrap min-w-[185px] cursor-pointer select-none transition-colors group',
+                  sortOption === 'upcoming_closest'
+                    ? 'bg-emerald-100 text-emerald-950 font-bold border-b-2 border-emerald-600'
+                    : sortOption === 'overdue_first'
+                    ? 'bg-red-50 text-red-950 font-bold border-b-2 border-red-600'
+                    : 'hover:bg-slate-200/80'
+                )}
+                title="Bấm để đổi chế độ: Sắp đến hạn gần nhất ➔ Quá hạn lên đầu"
+              >
+                <div className="flex items-center gap-1.5">
+                  <span>Thời Gian Còn Lại</span>
+                  {sortOption === 'upcoming_closest' ? (
+                    <span className="inline-flex items-center gap-0.5 text-[10px] bg-emerald-600 text-white px-1.5 py-0.5 rounded font-bold shadow-2xs">
+                      <ArrowUp className="w-2.5 h-2.5" /> Gần nhất
+                    </span>
+                  ) : sortOption === 'overdue_first' ? (
+                    <span className="inline-flex items-center gap-0.5 text-[10px] bg-red-600 text-white px-1.5 py-0.5 rounded font-bold shadow-2xs">
+                      <ArrowDown className="w-2.5 h-2.5" /> Quá hạn
+                    </span>
+                  ) : (
+                    <ArrowUpDown className="w-3 h-3 text-slate-400 opacity-60 group-hover:opacity-100" />
+                  )}
+                </div>
+              </th>
               <th className="px-3 py-3 text-center whitespace-nowrap w-20">Hoàn Thành</th>
             </tr>
           </thead>

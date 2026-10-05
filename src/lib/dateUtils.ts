@@ -1,22 +1,46 @@
 import { parse, differenceInSeconds, isPast, isFuture, format } from 'date-fns';
 
-const DATE_FORMAT = 'dd/MM/yyyy HH:mm';
+const DATE_FORMATS = [
+  'dd/MM/yyyy HH:mm:ss',
+  'dd/MM/yyyy HH:mm',
+  'dd/MM/yyyy',
+  'yyyy-MM-dd HH:mm:ss',
+  'yyyy-MM-dd HH:mm',
+  'yyyy-MM-dd',
+  'd/M/yyyy HH:mm:ss',
+  'd/M/yyyy HH:mm',
+  'd/M/yyyy',
+];
 
 export function parseDate(dateStr: string): Date | null {
   if (!dateStr) return null;
-  // Handle basic cleanup
-  const cleanStr = dateStr.trim();
-  try {
-    const parsed = parse(cleanStr, DATE_FORMAT, new Date());
-    if (isNaN(parsed.getTime())) return null;
-    return parsed;
-  } catch {
-    return null;
+  const cleanStr = String(dateStr).trim();
+  if (!cleanStr) return null;
+
+  for (const fmt of DATE_FORMATS) {
+    try {
+      const parsed = parse(cleanStr, fmt, new Date());
+      if (!isNaN(parsed.getTime())) return parsed;
+    } catch {
+      // try next
+    }
   }
+
+  // Fallback to native Date
+  try {
+    const fallback = new Date(cleanStr);
+    if (!isNaN(fallback.getTime())) return fallback;
+  } catch {
+    // ignore
+  }
+
+  return null;
 }
 
+const DEFAULT_DATE_FORMAT = 'dd/MM/yyyy HH:mm';
+
 export function getCurrentDateStr(): string {
-  return format(new Date(), DATE_FORMAT);
+  return format(new Date(), DEFAULT_DATE_FORMAT);
 }
 
 export interface TimeRemaining {
