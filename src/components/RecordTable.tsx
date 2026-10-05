@@ -579,15 +579,15 @@ export function RecordTable({
 
         {/* Dropdowns & Display Toggles */}
         <div className="flex flex-wrap items-center gap-2 text-xs sm:text-sm">
-          {/* Quick Select All Uncompleted Button */}
+          {/* Quick Select Button */}
           {totalUncompletedCount > 0 && (
             <button
               onClick={handleSelectAllUncompleted}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-sm transition-colors cursor-pointer"
-              title="Tích chọn toàn bộ các hồ sơ chưa hoàn thành để xử lý cùng lúc"
+              title="Tích chọn hồ sơ chưa hoàn thành để xử lý cùng lúc"
             >
               <CheckSquare className="w-4 h-4 text-white" />
-              <span>Tích chọn tất cả ({totalUncompletedCount})</span>
+              <span>Tích chọn ({totalUncompletedCount})</span>
             </button>
           )}
 
