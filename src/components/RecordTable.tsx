@@ -17,6 +17,9 @@ import {
   Filter,
   Layers,
   LayoutGrid,
+  AlignLeft,
+  ChevronsUpDown,
+  RotateCcw,
 } from 'lucide-react';
 
 interface RecordTableProps {
@@ -32,12 +35,39 @@ export function RecordTable({
 }: RecordTableProps) {
   const [now, setNow] = useState(new Date());
   const [processingRows, setProcessingRows] = useState<Set<number>>(new Set());
-  
+
   // Search and filter states
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedBoPhan, setSelectedBoPhan] = useState<string>('all');
   const [selectedMenu, setSelectedMenu] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+
+  // Display mode states: default to wrap text (full text display)
+  const [isWrapText, setIsWrapText] = useState<boolean>(() => {
+    const saved = localStorage.getItem('deadline_wrap_text');
+    return saved !== null ? saved === 'true' : true;
+  });
+
+  const [isCompact, setIsCompact] = useState<boolean>(() => {
+    const saved = localStorage.getItem('deadline_compact_mode');
+    return saved !== null ? saved === 'true' : false;
+  });
+
+  const toggleWrapText = () => {
+    setIsWrapText((prev) => {
+      const next = !prev;
+      localStorage.setItem('deadline_wrap_text', String(next));
+      return next;
+    });
+  };
+
+  const toggleCompact = () => {
+    setIsCompact((prev) => {
+      const next = !prev;
+      localStorage.setItem('deadline_compact_mode', String(next));
+      return next;
+    });
+  };
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -60,6 +90,8 @@ export function RecordTable({
 
         return {
           ...record,
+          ngayTraDate,
+          traThucTeDate,
           isCompleted,
           tr,
           warningStatus,
@@ -67,20 +99,26 @@ export function RecordTable({
         };
       })
       .sort((a, b) => {
-        // 1. Incomplete records always come before completed ones
-        if (a.isCompleted !== b.isCompleted) {
-          return a.isCompleted ? 1 : -1;
+        // Priority 1: Uncompleted before completed
+        if (!a.isCompleted && b.isCompleted) return -1;
+        if (a.isCompleted && !b.isCompleted) return 1;
+
+        // Priority 2: In uncompleted, overdue first
+        if (!a.isCompleted && !b.isCompleted) {
+          if (a.isOverdue && !b.isOverdue) return -1;
+          if (!a.isOverdue && b.isOverdue) return 1;
+
+          // Priority 3: Lowest remaining time first
+          if (a.tr && b.tr) {
+            return a.tr.totalSeconds - b.tr.totalSeconds;
+          }
         }
 
-        // 2. Sort by time remaining (totalSeconds ascending)
-        if (!a.tr) return 1;
-        if (!b.tr) return -1;
-
-        return a.tr.totalSeconds - b.tr.totalSeconds;
+        return a.rowIndex - b.rowIndex;
       });
   }, [records, now]);
 
-  // Unique lists for filter dropdowns
+  // Extract unique lists for filtering
   const uniqueBoPhanList = useMemo(() => {
     const set = new Set<string>();
     records.forEach((r) => {
@@ -88,7 +126,7 @@ export function RecordTable({
         set.add(r.boPhanHienTai.trim());
       }
     });
-    return Array.from(set).sort();
+    return Array.from(set).sort((a, b) => a.localeCompare(b, 'vi'));
   }, [records]);
 
   const uniqueMenuList = useMemo(() => {
@@ -98,131 +136,157 @@ export function RecordTable({
         set.add(r.menuHienTai.trim());
       }
     });
-    return Array.from(set).sort();
+    return Array.from(set).sort((a, b) => a.localeCompare(b, 'vi'));
   }, [records]);
 
-  // Filtered records
+  // Filtering records based on all conditions
   const filteredRecords = useMemo(() => {
-    return processedRecords.filter((record) => {
-      // 1. Search term matching
+    return processedRecords.filter((rec) => {
+      // 1. Search text filter
       if (searchTerm.trim()) {
         const q = searchTerm.toLowerCase();
-        const matches =
-          record.soHoSo?.toLowerCase().includes(q) ||
-          record.quyTrinh?.toLowerCase().includes(q) ||
-          record.boPhanHienTai?.toLowerCase().includes(q) ||
-          record.menuHienTai?.toLowerCase().includes(q) ||
-          record.tenDonVi?.toLowerCase().includes(q) ||
-          record.coQuanXuLy?.toLowerCase().includes(q) ||
-          record.canBoXuLy?.toLowerCase().includes(q);
-        if (!matches) return false;
+        const match =
+          (rec.soHoSo && rec.soHoSo.toLowerCase().includes(q)) ||
+          (rec.quyTrinh && rec.quyTrinh.toLowerCase().includes(q)) ||
+          (rec.tenDonVi && rec.tenDonVi.toLowerCase().includes(q)) ||
+          (rec.boPhanHienTai && rec.boPhanHienTai.toLowerCase().includes(q)) ||
+          (rec.menuHienTai && rec.menuHienTai.toLowerCase().includes(q)) ||
+          (rec.coQuanXuLy && rec.coQuanXuLy.toLowerCase().includes(q)) ||
+          (rec.canBoXuLy && rec.canBoXuLy.toLowerCase().includes(q));
+
+        if (!match) return false;
       }
 
-      // 2. Bo phan filter
+      // 2. Bộ phận hiện tại filter
       if (selectedBoPhan !== 'all') {
-        if (record.boPhanHienTai !== selectedBoPhan) return false;
+        if (!rec.boPhanHienTai || rec.boPhanHienTai.trim() !== selectedBoPhan) {
+          return false;
+        }
       }
 
-      // 3. Menu filter
+      // 3. Menu hiện tại filter
       if (selectedMenu !== 'all') {
-        if (record.menuHienTai !== selectedMenu) return false;
+        if (!rec.menuHienTai || rec.menuHienTai.trim() !== selectedMenu) {
+          return false;
+        }
       }
 
       // 4. Status filter
-      if (statusFilter === 'overdue') {
-        if (record.isCompleted || !record.isOverdue) return false;
-      } else if (statusFilter === 'warning') {
-        if (record.isCompleted || record.isOverdue || !record.tr || record.tr.totalSeconds > 72 * 3600) return false;
-      } else if (statusFilter === 'in_progress') {
-        if (record.isCompleted) return false;
+      if (statusFilter === 'in_progress') {
+        if (rec.isCompleted) return false;
       } else if (statusFilter === 'completed') {
-        if (!record.isCompleted) return false;
+        if (!rec.isCompleted) return false;
+      } else if (statusFilter === 'overdue') {
+        if (!rec.isOverdue) return false;
+      } else if (statusFilter === 'warning') {
+        if (rec.isCompleted || rec.isOverdue) return false;
+        if (!['warning-1', 'warning-2', 'warning-3'].includes(rec.warningStatus)) return false;
       }
 
       return true;
     });
   }, [processedRecords, searchTerm, selectedBoPhan, selectedMenu, statusFilter]);
 
-  const overdueCount = processedRecords.filter((r) => !r.isCompleted && r.isOverdue).length;
-  const warningCount = processedRecords.filter(
-    (r) => !r.isCompleted && !r.isOverdue && r.tr && r.tr.totalSeconds <= 72 * 3600
-  ).length;
-  const completedCount = processedRecords.filter((r) => r.isCompleted).length;
+  const handleResetFilters = () => {
+    setSearchTerm('');
+    setSelectedBoPhan('all');
+    setSelectedMenu('all');
+    setStatusFilter('all');
+  };
+
+  const hasActiveFilters =
+    searchTerm.trim() !== '' ||
+    selectedBoPhan !== 'all' ||
+    selectedMenu !== 'all' ||
+    statusFilter !== 'all';
 
   const handleMarkComplete = async (record: SheetRecord) => {
+    if (!webAppUrl) {
+      alert('Vui lòng nhập Web App URL trước');
+      return;
+    }
+
+    const todayStr = getCurrentDateStr();
     const confirmed = window.confirm(
       `Bạn có chắc chắn muốn đánh dấu hoàn thành hồ sơ ${record.soHoSo}? Thao tác này sẽ ghi nhận thời gian trả thực tế vào hệ thống.`
     );
     if (!confirmed) return;
 
     setProcessingRows((prev) => new Set(prev).add(record.rowIndex));
-    const timestampStr = getCurrentDateStr();
-
-    const success = await markRecordCompleted(
-      webAppUrl,
-      record.rowIndex,
-      timestampStr
-    );
-
-    setProcessingRows((prev) => {
-      const next = new Set(prev);
-      next.delete(record.rowIndex);
-      return next;
-    });
-
-    if (success) {
-      onRefresh();
-    } else {
-      alert('Có lỗi xảy ra khi cập nhật dữ liệu.');
+    try {
+      const success = await markRecordCompleted(webAppUrl, record.rowIndex, todayStr);
+      if (success) {
+        onRefresh();
+      } else {
+        alert('Có lỗi xảy ra khi cập nhật trạng thái hoàn thành.');
+      }
+    } catch (e: any) {
+      alert('Lỗi: ' + (e?.message || 'Không thể cập nhật'));
+    } finally {
+      setProcessingRows((prev) => {
+        const next = new Set(prev);
+        next.delete(record.rowIndex);
+        return next;
+      });
     }
   };
 
+  const overdueCount = processedRecords.filter((r) => r.isOverdue && !r.isCompleted).length;
+  const warningCount = processedRecords.filter(
+    (r) => !r.isCompleted && !r.isOverdue && ['warning-1', 'warning-2', 'warning-3'].includes(r.warningStatus)
+  ).length;
+  const completedCount = processedRecords.filter((r) => r.isCompleted).length;
+
+  // Cell padding class based on compact mode
+  const cellPadding = isCompact ? 'px-3 py-1.5' : 'px-3.5 py-2.5';
+
   return (
-    <div className="flex flex-col gap-4">
-      {/* Alert Banner for Overdue / Warning */}
+    <div className="flex flex-col gap-3">
+      {/* Alert banner if overdue exists */}
       {(overdueCount > 0 || warningCount > 0) && (
-        <div className="bg-orange-50 border border-orange-200 rounded-lg p-4 flex items-start gap-3 shadow-sm mx-4 mt-4">
-          <AlertTriangle className="w-5 h-5 text-orange-600 flex-shrink-0 mt-0.5" />
-          <div className="flex-1">
-            <h3 className="font-semibold text-orange-800 text-sm">Cảnh báo hạn xử lý hồ sơ</h3>
-            <p className="text-orange-700 text-xs sm:text-sm mt-1">
-              {overdueCount > 0 && (
-                <span className="inline-block mr-3">
-                  Có <strong className="font-bold text-red-600">{overdueCount}</strong> hồ sơ đang <strong className="font-bold text-red-600">quá hạn</strong>.
-                </span>
-              )}
-              {warningCount > 0 && (
-                <span className="inline-block">
-                  Có <strong className="font-bold">{warningCount}</strong> hồ sơ <strong className="font-bold">sắp đến hạn</strong> trong 3 ngày tới.
-                </span>
-              )}
-            </p>
+        <div className="mx-4 mt-3 p-3 bg-amber-50/90 border border-amber-200 rounded-xl flex items-center gap-3 text-amber-900 shadow-2xs">
+          <AlertTriangle className="w-5 h-5 flex-shrink-0 text-amber-600" />
+          <div className="flex-1 text-xs sm:text-sm">
+            <span className="font-semibold">Lưu ý theo dõi hạn: </span>
+            {overdueCount > 0 && (
+              <span className="inline-block mr-3">
+                Có <strong className="font-bold text-red-600">{overdueCount}</strong> hồ sơ đang <strong className="font-bold text-red-600">quá hạn</strong>.
+              </span>
+            )}
+            {warningCount > 0 && (
+              <span className="inline-block">
+                Có <strong className="font-bold">{warningCount}</strong> hồ sơ <strong className="font-bold">sắp đến hạn</strong> trong 3 ngày tới.
+              </span>
+            )}
           </div>
         </div>
       )}
 
-      {/* Filter and Search Bar */}
-      <div className="px-4 pt-2 flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between">
-        <div className="relative flex-1 max-w-md">
+      {/* Filter, Search & View Controls Bar */}
+      <div className="px-4 pt-1 flex flex-col xl:flex-row gap-3 items-stretch xl:items-center justify-between">
+        {/* Search */}
+        <div className="relative flex-1 max-w-lg">
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
           <input
             type="text"
-            placeholder="Tìm theo số hồ sơ, quy trình, bộ phận, cán bộ..."
+            placeholder="Tìm theo số hồ sơ, quy trình, bộ phận, cán bộ, tên đơn vị..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-9 pr-3 py-1.5 text-xs sm:text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 bg-white"
+            className="w-full pl-9 pr-3 py-1.5 text-xs sm:text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 bg-white shadow-2xs"
           />
         </div>
 
+        {/* Dropdowns & Display Toggles */}
         <div className="flex flex-wrap items-center gap-2 text-xs sm:text-sm">
           {/* Bộ phận hiện tại filter */}
           {uniqueBoPhanList.length > 0 && (
-            <div className="flex items-center gap-1 bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 shadow-sm">
+            <div className="flex items-center gap-1 bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 shadow-2xs">
               <Layers className="w-3.5 h-3.5 text-slate-500" />
               <select
                 value={selectedBoPhan}
                 onChange={(e) => setSelectedBoPhan(e.target.value)}
-                className="bg-transparent border-none text-slate-700 font-medium focus:outline-none text-xs"
+                className="bg-transparent border-none text-slate-700 font-medium focus:outline-none text-xs cursor-pointer max-w-[150px] truncate"
+                title="Lọc theo Bộ phận hiện tại"
               >
                 <option value="all">Tất cả Bộ phận ({uniqueBoPhanList.length})</option>
                 {uniqueBoPhanList.map((bp) => (
@@ -236,12 +300,13 @@ export function RecordTable({
 
           {/* Menu hiện tại filter */}
           {uniqueMenuList.length > 0 && (
-            <div className="flex items-center gap-1 bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 shadow-sm">
+            <div className="flex items-center gap-1 bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 shadow-2xs">
               <LayoutGrid className="w-3.5 h-3.5 text-slate-500" />
               <select
                 value={selectedMenu}
                 onChange={(e) => setSelectedMenu(e.target.value)}
-                className="bg-transparent border-none text-slate-700 font-medium focus:outline-none text-xs"
+                className="bg-transparent border-none text-slate-700 font-medium focus:outline-none text-xs cursor-pointer max-w-[150px] truncate"
+                title="Lọc theo Menu hiện tại"
               >
                 <option value="all">Tất cả Menu ({uniqueMenuList.length})</option>
                 {uniqueMenuList.map((m) => (
@@ -254,12 +319,12 @@ export function RecordTable({
           )}
 
           {/* Status filter */}
-          <div className="flex items-center gap-1 bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 shadow-sm">
+          <div className="flex items-center gap-1 bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 shadow-2xs">
             <Filter className="w-3.5 h-3.5 text-slate-500" />
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
-              className="bg-transparent border-none text-slate-700 font-medium focus:outline-none text-xs"
+              className="bg-transparent border-none text-slate-700 font-medium focus:outline-none text-xs cursor-pointer"
             >
               <option value="all">Tất cả trạng thái</option>
               <option value="in_progress">Đang xử lý (chưa xong)</option>
@@ -268,35 +333,101 @@ export function RecordTable({
               <option value="completed">Đã hoàn thành ({completedCount})</option>
             </select>
           </div>
+
+          {/* Reset filters button */}
+          {hasActiveFilters && (
+            <button
+              onClick={handleResetFilters}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-600 hover:text-slate-900 hover:bg-slate-100 text-xs font-medium cursor-pointer shadow-2xs transition-colors"
+              title="Xóa tất cả bộ lọc đang áp dụng"
+            >
+              <RotateCcw className="w-3.5 h-3.5 text-slate-500" />
+              <span>Xóa lọc</span>
+            </button>
+          )}
+
+          {/* Wrap Text Toggle */}
+          <button
+            onClick={toggleWrapText}
+            className={cn(
+              'flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium shadow-2xs transition-colors cursor-pointer',
+              isWrapText
+                ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'
+            )}
+            title={
+              isWrapText
+                ? 'Đang bật hiển thị đầy đủ chữ (xuống dòng tự nhiên). Bấm để chuyển sang thu gọn 1 dòng (...)'
+                : 'Đang bật thu gọn 1 dòng. Bấm để hiển thị trọn vẹn toàn bộ chữ không bị cắt bớt'
+            }
+          >
+            <AlignLeft className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">
+              Chữ: <strong>{isWrapText ? 'Hiện đủ chữ' : 'Thu gọn'}</strong>
+            </span>
+          </button>
+
+          {/* Density Compact Toggle */}
+          <button
+            onClick={toggleCompact}
+            className={cn(
+              'flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium shadow-2xs transition-colors cursor-pointer',
+              isCompact
+                ? 'bg-slate-800 text-white border-slate-800'
+                : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'
+            )}
+            title="Đổi khoảng cách dòng: Gọn gàng hoặc Vừa vặn"
+          >
+            <ChevronsUpDown className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">
+              Dòng: <strong>{isCompact ? 'Gọn' : 'Vừa'}</strong>
+            </span>
+          </button>
         </div>
       </div>
 
-      {/* Main Table */}
+      {/* Main Table Container: Full Landscape with comfortable horizontal scroll when needed */}
       <div className="overflow-x-auto bg-white border-t border-slate-200">
-        <table className="w-full text-sm text-left">
-          <thead className="bg-slate-50 text-slate-700 font-semibold border-b border-slate-200 text-xs uppercase tracking-wider">
+        <table className="w-full min-w-full text-xs xl:text-sm text-left border-collapse">
+          <thead className="bg-slate-100/90 text-slate-700 font-semibold border-b border-slate-200 text-xs uppercase tracking-wider sticky top-0 z-10 backdrop-blur-xs">
             <tr>
-              <th className="px-3 py-3 w-12 text-center">STT</th>
-              <th className="px-3 py-3 whitespace-nowrap">Số Hồ Sơ</th>
-              <th className="px-3 py-3 min-w-[140px]">Quy Trình</th>
-              <th className="px-3 py-3 min-w-[140px]">Bộ Phận Hiện Tại</th>
-              <th className="px-3 py-3 min-w-[140px]">Menu Hiện Tại</th>
-              <th className="px-3 py-3 min-w-[160px]">Tên Đơn Vị / Họ Tên</th>
-              <th className="px-3 py-3 min-w-[150px]">Cơ Quan / Cán Bộ XL</th>
-              <th className="px-3 py-3 whitespace-nowrap">Ngày Nhận</th>
-              <th className="px-3 py-3 whitespace-nowrap">Hạn Trả</th>
-              <th className="px-3 py-3 whitespace-nowrap">Trả Thực Tế</th>
-              <th className="px-3 py-3 min-w-[170px]">Thời Gian Còn Lại</th>
-              <th className="px-3 py-3 text-center whitespace-nowrap">Hoàn Thành</th>
+              <th className="px-3 py-3 w-12 text-center whitespace-nowrap">STT</th>
+              <th className="px-3.5 py-3 whitespace-nowrap min-w-[140px]">Số Hồ Sơ</th>
+              <th className="px-3.5 py-3 min-w-[200px] xl:min-w-[240px]">Quy Trình</th>
+              <th className="px-3.5 py-3 min-w-[160px] xl:min-w-[200px] text-emerald-900 bg-emerald-50/40">
+                Bộ Phận Hiện Tại
+              </th>
+              <th className="px-3.5 py-3 min-w-[160px] xl:min-w-[200px] text-blue-900 bg-blue-50/40">
+                Menu Hiện Tại
+              </th>
+              <th className="px-3.5 py-3 min-w-[180px] xl:min-w-[240px]">Tên Đơn Vị / Họ Tên</th>
+              <th className="px-3.5 py-3 min-w-[180px] xl:min-w-[220px]">Cơ Quan / Cán Bộ XL</th>
+              <th className="px-3 py-3 whitespace-nowrap text-center min-w-[105px]">Ngày Nhận</th>
+              <th className="px-3 py-3 whitespace-nowrap text-center min-w-[105px]">Hạn Trả</th>
+              <th className="px-3 py-3 whitespace-nowrap text-center min-w-[105px]">Trả Thực Tế</th>
+              <th className="px-3.5 py-3 whitespace-nowrap min-w-[165px]">Thời Gian Còn Lại</th>
+              <th className="px-3 py-3 text-center whitespace-nowrap w-20">Hoàn Thành</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-100 text-xs sm:text-sm">
+          <tbody className="divide-y divide-slate-100">
             {filteredRecords.length === 0 ? (
               <tr>
-                <td colSpan={12} className="px-4 py-12 text-center text-slate-500">
-                  {records.length === 0
-                    ? 'Không có dữ liệu hồ sơ'
-                    : 'Không tìm thấy hồ sơ nào khớp với bộ lọc hiện tại'}
+                <td colSpan={12} className="px-4 py-16 text-center text-slate-500">
+                  <div className="flex flex-col items-center justify-center gap-2">
+                    <p className="font-semibold text-slate-700">
+                      {records.length === 0
+                        ? 'Chưa có dữ liệu hồ sơ'
+                        : 'Không tìm thấy hồ sơ nào khớp với bộ lọc'}
+                    </p>
+                    {hasActiveFilters && (
+                      <button
+                        onClick={handleResetFilters}
+                        className="text-xs text-emerald-600 hover:text-emerald-700 font-medium underline"
+                      >
+                        Bấm vào đây để xóa bộ lọc
+                      </button>
+                    )}
+                  </div>
                 </td>
               </tr>
             ) : (
@@ -317,16 +448,27 @@ export function RecordTable({
                 return (
                   <tr
                     key={record.rowIndex}
-                    className="hover:bg-slate-50/80 transition-colors"
+                    className="odd:bg-white even:bg-slate-50/40 hover:bg-emerald-50/40 transition-colors"
                   >
-                    <td className="px-3 py-3 text-center text-slate-500 font-mono">
+                    {/* STT */}
+                    <td className={cn(cellPadding, 'text-center text-slate-500 font-mono')}>
                       {record.stt || idx + 1}
                     </td>
-                    <td className="px-3 py-3 font-semibold text-slate-900 whitespace-nowrap">
+
+                    {/* SỐ HỒ SƠ */}
+                    <td className={cn(cellPadding, 'font-semibold font-mono text-slate-900 whitespace-nowrap')}>
                       {record.soHoSo || '-'}
                     </td>
+
+                    {/* QUY TRÌNH */}
                     <td
-                      className="px-3 py-3 text-slate-700 max-w-[200px] truncate"
+                      className={cn(
+                        cellPadding,
+                        'text-slate-800',
+                        isWrapText
+                          ? 'whitespace-normal break-words leading-relaxed max-w-[340px]'
+                          : 'max-w-[240px] truncate'
+                      )}
                       title={record.quyTrinh}
                     >
                       {record.quyTrinh || '-'}
@@ -334,7 +476,13 @@ export function RecordTable({
 
                     {/* BỘ PHẬN HIỆN TẠI */}
                     <td
-                      className="px-3 py-3 text-slate-700 max-w-[180px] truncate"
+                      className={cn(
+                        cellPadding,
+                        'text-slate-800 font-medium',
+                        isWrapText
+                          ? 'whitespace-normal break-words leading-relaxed max-w-[260px]'
+                          : 'max-w-[200px] truncate'
+                      )}
                       title={record.boPhanHienTai}
                     >
                       {record.boPhanHienTai || '-'}
@@ -342,37 +490,66 @@ export function RecordTable({
 
                     {/* MENU HIỆN TẠI */}
                     <td
-                      className="px-3 py-3 text-slate-700 max-w-[180px] truncate"
+                      className={cn(
+                        cellPadding,
+                        'text-slate-700',
+                        isWrapText
+                          ? 'whitespace-normal break-words leading-relaxed max-w-[260px]'
+                          : 'max-w-[200px] truncate'
+                      )}
                       title={record.menuHienTai}
                     >
                       {record.menuHienTai || '-'}
                     </td>
 
+                    {/* TÊN ĐƠN VỊ / HỌ TÊN */}
                     <td
-                      className="px-3 py-3 text-slate-900 max-w-[200px] truncate font-medium"
+                      className={cn(
+                        cellPadding,
+                        'text-slate-900 font-medium',
+                        isWrapText
+                          ? 'whitespace-normal break-words leading-relaxed max-w-[320px]'
+                          : 'max-w-[220px] truncate'
+                      )}
                       title={record.tenDonVi}
                     >
                       {record.tenDonVi || '-'}
                     </td>
 
-                    <td className="px-3 py-3 text-slate-600 text-xs">
-                      <div className="font-medium text-slate-800 truncate max-w-[170px]" title={record.coQuanXuLy}>
+                    {/* CƠ QUAN / CÁN BỘ XL */}
+                    <td className={cn(cellPadding, 'text-slate-600')}>
+                      <div
+                        className={cn(
+                          'font-medium text-slate-800',
+                          isWrapText ? 'whitespace-normal break-words leading-tight' : 'max-w-[200px] truncate'
+                        )}
+                        title={record.coQuanXuLy}
+                      >
                         {record.coQuanXuLy || '-'}
                       </div>
-                      <div className="text-slate-500 truncate max-w-[170px]" title={record.canBoXuLy}>
+                      <div
+                        className={cn(
+                          'text-slate-500 mt-0.5',
+                          isWrapText ? 'whitespace-normal break-words leading-tight' : 'max-w-[200px] truncate'
+                        )}
+                        title={record.canBoXuLy}
+                      >
                         {record.canBoXuLy || '-'}
                       </div>
                     </td>
 
-                    <td className="px-3 py-3 text-slate-600 whitespace-nowrap text-xs">
+                    {/* NGÀY NHẬN */}
+                    <td className={cn(cellPadding, 'text-slate-600 whitespace-nowrap text-center font-mono')}>
                       {record.ngayNhan || '-'}
                     </td>
 
-                    <td className="px-3 py-3 text-slate-900 font-semibold whitespace-nowrap text-xs">
+                    {/* HẠN TRẢ */}
+                    <td className={cn(cellPadding, 'text-slate-900 font-semibold whitespace-nowrap text-center font-mono')}>
                       {record.ngayTra || '-'}
                     </td>
 
-                    <td className="px-3 py-3 text-slate-600 whitespace-nowrap text-xs">
+                    {/* TRẢ THỰC TẾ */}
+                    <td className={cn(cellPadding, 'whitespace-nowrap text-center font-mono')}>
                       {record.traThucTe ? (
                         <span className="text-emerald-700 font-medium">{record.traThucTe}</span>
                       ) : (
@@ -380,10 +557,11 @@ export function RecordTable({
                       )}
                     </td>
 
-                    <td className="px-3 py-3">
+                    {/* THỜI GIAN CÒN LẠI */}
+                    <td className={cn(cellPadding, 'whitespace-nowrap')}>
                       <div
                         className={cn(
-                          'px-2 py-1 rounded-md text-xs font-medium flex items-center gap-1.5 border shadow-2xs',
+                          'px-2.5 py-1 rounded-md text-xs font-medium flex items-center gap-1.5 border shadow-2xs',
                           statusColorClass
                         )}
                       >
@@ -411,19 +589,20 @@ export function RecordTable({
                       </div>
                     </td>
 
-                    <td className="px-3 py-3 text-center">
+                    {/* HOÀN THÀNH */}
+                    <td className={cn(cellPadding, 'text-center')}>
                       {record.isCompleted ? (
                         <span
-                          className="inline-flex items-center justify-center text-emerald-600 bg-emerald-100 p-1 rounded-full"
+                          className="inline-flex items-center justify-center text-emerald-600 bg-emerald-100 p-1.5 rounded-full"
                           title="Đã hoàn thành"
                         >
-                          <Check className="w-3.5 h-3.5" />
+                          <Check className="w-4 h-4" />
                         </span>
                       ) : (
                         <button
                           onClick={() => handleMarkComplete(record)}
                           disabled={processingRows.has(record.rowIndex)}
-                          className="inline-flex items-center justify-center p-1.5 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-full transition-colors disabled:opacity-50"
+                          className="inline-flex items-center justify-center p-1.5 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-full transition-colors disabled:opacity-50 cursor-pointer"
                           title="Đánh dấu hoàn thành"
                         >
                           {processingRows.has(record.rowIndex) ? (

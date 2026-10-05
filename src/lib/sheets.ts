@@ -120,9 +120,23 @@ export function normalizeRecord(raw: any, index: number, headerMap?: Record<stri
       const val = raw[key] != null ? String(raw[key]).trim() : '';
       if (!val) continue;
 
-      if ((k.includes('bophanhientai') || k.includes('bophan') || k.includes('phongban')) && !record.boPhanHienTai) {
+      if (
+        (k.includes('bophanhientai') ||
+          k.includes('bophan') ||
+          k.includes('phongban') ||
+          k.includes('bphientai') ||
+          (k.includes('bp') && k.includes('hientai'))) &&
+        !record.boPhanHienTai
+      ) {
         record.boPhanHienTai = val;
-      } else if ((k.includes('menuhientai') || k.includes('menu') || k.includes('buocxuly')) && !record.menuHienTai) {
+      } else if (
+        (k.includes('menuhientai') ||
+          k.includes('menu') ||
+          k.includes('buocxuly') ||
+          k.includes('mnhientai') ||
+          (k.includes('mn') && k.includes('hientai'))) &&
+        !record.menuHienTai
+      ) {
         record.menuHienTai = val;
       } else if ((k.includes('sohoso') || k.includes('mahoso') || k === 'shs') && !record.soHoSo) {
         record.soHoSo = val;

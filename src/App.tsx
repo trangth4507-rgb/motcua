@@ -8,6 +8,8 @@ import {
   Clock,
   AlertTriangle,
   CheckCircle2,
+  Maximize2,
+  Minimize2,
 } from 'lucide-react';
 import { cn } from './lib/utils';
 import { parseDate, calculateTimeRemaining } from './lib/dateUtils';
@@ -20,6 +22,20 @@ export default function App() {
   const [records, setRecords] = useState<SheetRecord[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Full landscape mode enabled by default for maximum widescreen viewing
+  const [isFullLandscape, setIsFullLandscape] = useState<boolean>(() => {
+    const saved = localStorage.getItem('deadline_full_landscape');
+    return saved !== null ? saved === 'true' : true;
+  });
+
+  const toggleLandscape = () => {
+    setIsFullLandscape((prev) => {
+      const next = !prev;
+      localStorage.setItem('deadline_full_landscape', String(next));
+      return next;
+    });
+  };
 
   useEffect(() => {
     if (webAppUrl) {
@@ -90,7 +106,12 @@ export default function App() {
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-800">
       {/* Header */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-20 shadow-2xs">
-        <div className="max-w-7xl w-full mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
+        <div
+          className={cn(
+            'w-full h-16 flex items-center justify-between transition-all duration-200',
+            isFullLandscape ? 'px-3 sm:px-6 2xl:px-8' : 'max-w-7xl mx-auto px-4 sm:px-6'
+          )}
+        >
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-emerald-600 text-white rounded-xl flex items-center justify-center shadow-sm">
               <FileSpreadsheet className="w-5 h-5" />
@@ -101,17 +122,58 @@ export default function App() {
                 <span className="text-[10px] font-semibold tracking-wider uppercase px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800">
                   Một cửa điện tử
                 </span>
+                {isFullLandscape && (
+                  <span className="hidden md:inline-flex text-[10px] font-medium px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">
+                    Toàn cảnh (Full Landscape)
+                  </span>
+                )}
               </div>
               <p className="text-xs text-slate-500 font-medium">
                 Theo dõi hạn xử lý & nhắc việc hồ sơ
               </p>
             </div>
           </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={toggleLandscape}
+              className={cn(
+                'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all shadow-2xs cursor-pointer',
+                isFullLandscape
+                  ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100'
+                  : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+              )}
+              title={
+                isFullLandscape
+                  ? 'Đang bật chế độ Mở rộng toàn màn hình ngang (Full Landscape). Bấm để thu về chiều rộng chuẩn.'
+                  : 'Bấm để mở rộng giao diện toàn màn hình ngang (Full Landscape) hiển thị đầy đủ các cột.'
+              }
+            >
+              {isFullLandscape ? (
+                <>
+                  <Minimize2 className="w-4 h-4 text-emerald-700" />
+                  <span className="hidden sm:inline">Giao diện: <strong>Full Landscape</strong></span>
+                  <span className="sm:hidden">Full</span>
+                </>
+              ) : (
+                <>
+                  <Maximize2 className="w-4 h-4 text-slate-600" />
+                  <span className="hidden sm:inline">Mở rộng <strong>Full Landscape</strong></span>
+                  <span className="sm:hidden">Mở rộng</span>
+                </>
+              )}
+            </button>
+          </div>
         </div>
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 py-5 flex flex-col gap-4">
+      <main
+        className={cn(
+          'flex-1 w-full py-4 flex flex-col gap-4 transition-all duration-200',
+          isFullLandscape ? 'px-3 sm:px-6 2xl:px-8' : 'max-w-7xl mx-auto px-4 sm:px-6'
+        )}
+      >
         {/* Configuration Bar */}
         <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm flex flex-col md:flex-row gap-4 items-stretch md:items-center justify-between">
           <div className="flex-1">
