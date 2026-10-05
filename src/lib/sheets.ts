@@ -265,6 +265,72 @@ export async function markRecordCompleted(
   }
 }
 
+export async function markMultipleRecordsCompleted(
+  webAppUrl: string,
+  rowIndices: number[],
+  timestampStr: string,
+  onProgress?: (completedCount: number, total: number) => void
+): Promise<{ success: boolean; successCount: number; failedCount: number }> {
+  if (!webAppUrl || rowIndices.length === 0) {
+    return { success: false, successCount: 0, failedCount: 0 };
+  }
+
+  // 1. Try batch action if supported by backend
+  try {
+    const res = await fetch(webAppUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/plain;charset=utf-8',
+      },
+      body: JSON.stringify({
+        action: 'markMultipleComplete',
+        rowIndices: rowIndices,
+        timestamp: timestampStr,
+      }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.status === 'success') {
+        if (onProgress) onProgress(rowIndices.length, rowIndices.length);
+        return { success: true, successCount: rowIndices.length, failedCount: 0 };
+      }
+    }
+  } catch (e) {
+    console.warn('Batch endpoint not available, falling back to parallel chunk execution:', e);
+  }
+
+  // 2. Fallback: Process each row in chunks to ensure full compatibility
+  let successCount = 0;
+  let failedCount = 0;
+  const total = rowIndices.length;
+  const chunkSize = 4;
+
+  for (let i = 0; i < rowIndices.length; i += chunkSize) {
+    const chunk = rowIndices.slice(i, i + chunkSize);
+    const results = await Promise.allSettled(
+      chunk.map((idx) => markRecordCompleted(webAppUrl, idx, timestampStr))
+    );
+
+    for (const r of results) {
+      if (r.status === 'fulfilled' && r.value) {
+        successCount++;
+      } else {
+        failedCount++;
+      }
+    }
+    if (onProgress) {
+      onProgress(successCount + failedCount, total);
+    }
+  }
+
+  return {
+    success: successCount > 0,
+    successCount,
+    failedCount,
+  };
+}
+
 export async function updateRecordField(
   webAppUrl: string,
   rowIndex: number,
