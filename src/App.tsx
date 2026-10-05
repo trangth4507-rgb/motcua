@@ -103,7 +103,7 @@ export default function App() {
                 </span>
               </div>
               <p className="text-xs text-slate-500 font-medium">
-                Theo dõi hạn xử lý & nhắc việc hồ sơ Google Sheets
+                Theo dõi hạn xử lý & nhắc việc hồ sơ
               </p>
             </div>
           </div>
@@ -117,7 +117,7 @@ export default function App() {
           <div className="flex-1">
             <div className="flex items-center justify-between mb-1.5">
               <label className="text-xs font-semibold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
-                <span>Cấu hình Web App URL (Apps Script)</span>
+                <span>Cấu hình Web App URL</span>
                 <span className="text-[10px] font-normal normal-case text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100">
                   Tự động lưu bộ nhớ trình duyệt
                 </span>
@@ -128,7 +128,7 @@ export default function App() {
                 type="text"
                 value={webAppUrl}
                 onChange={(e) => setWebAppUrl(e.target.value)}
-                placeholder="Nhập URL Web App (https://script.google.com/macros/s/.../exec)"
+                placeholder="Nhập đường dẫn Web App URL..."
                 className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all font-mono"
               />
               <button
@@ -218,7 +218,7 @@ export default function App() {
           {isLoading && records.length === 0 ? (
             <div className="flex-1 flex flex-col items-center justify-center py-24 text-slate-500">
               <div className="w-10 h-10 rounded-full border-4 border-emerald-200 border-t-emerald-600 animate-spin mb-4" />
-              <p className="font-medium text-sm">Đang kết nối đến Apps Script...</p>
+              <p className="font-medium text-sm">Đang tải dữ liệu...</p>
             </div>
           ) : !webAppUrl && records.length === 0 ? (
             <div className="flex-1 flex flex-col items-center justify-center py-20 px-4 text-center text-slate-500">
@@ -227,7 +227,7 @@ export default function App() {
               </div>
               <h3 className="font-bold text-slate-800 text-base mb-1">Chưa có liên kết dữ liệu</h3>
               <p className="text-sm max-w-md text-slate-500">
-                Vui lòng nhập Web App URL của Google Apps Script ở phía trên để tải dữ liệu danh sách hồ sơ.
+                Vui lòng nhập Web App URL ở phía trên để tải dữ liệu danh sách hồ sơ.
               </p>
             </div>
           ) : (

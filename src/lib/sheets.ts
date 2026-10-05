@@ -1,5 +1,5 @@
 export interface SheetRecord {
-  rowIndex: number; // to know which row to update
+  rowIndex: number;
   stt: string;
   soHoSo: string;
   quyTrinh: string;
@@ -16,108 +16,137 @@ export interface SheetRecord {
 
 export const WEB_APP_URL_DEFAULT = '';
 
-// Helper to normalize any incoming item from Google Apps Script
-export function normalizeRecord(raw: any, index: number): SheetRecord {
-  if (!raw || typeof raw !== 'object') {
-    return {
-      rowIndex: index + 2,
-      stt: String(index + 1),
-      soHoSo: '',
-      quyTrinh: '',
-      boPhanHienTai: '',
-      menuHienTai: '',
-      tenDonVi: '',
-      coQuanXuLy: '',
-      canBoXuLy: '',
-      ngayNhan: '',
-      ngayTra: '',
-      traThucTe: '',
-    };
-  }
+// Helper to remove accents, lowercase, strip all spaces and punctuation
+export function cleanKey(str: string): string {
+  if (!str) return '';
+  return String(str)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'd')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+}
 
-  // If raw is an array of cell values
+// Convert any format from Google Apps Script into a standard SheetRecord
+export function normalizeRecord(raw: any, index: number, headerMap?: Record<string, number>): SheetRecord {
+  const record: SheetRecord = {
+    rowIndex: index + 2,
+    stt: String(index + 1),
+    soHoSo: '',
+    quyTrinh: '',
+    boPhanHienTai: '',
+    menuHienTai: '',
+    tenDonVi: '',
+    coQuanXuLy: '',
+    canBoXuLy: '',
+    ngayNhan: '',
+    ngayTra: '',
+    traThucTe: '',
+  };
+
+  if (!raw) return record;
+
+  // Case 1: raw is an array of cells [cell0, cell1, ...]
   if (Array.isArray(raw)) {
-    return {
-      rowIndex: index + 2,
-      stt: String(raw[0] ?? index + 1).trim(),
-      soHoSo: String(raw[1] ?? '').trim(),
-      quyTrinh: String(raw[2] ?? '').trim(),
-      boPhanHienTai: String(raw[3] ?? '').trim(),
-      menuHienTai: String(raw[4] ?? '').trim(),
-      tenDonVi: String(raw[5] ?? '').trim(),
-      coQuanXuLy: String(raw[6] ?? '').trim(),
-      canBoXuLy: String(raw[7] ?? '').trim(),
-      ngayNhan: String(raw[8] ?? '').trim(),
-      ngayTra: String(raw[9] ?? '').trim(),
-      traThucTe: String(raw[10] ?? '').trim(),
-    };
+    if (headerMap && Object.keys(headerMap).length > 0) {
+      // Map using dynamic header indexes
+      const getByHeaderKey = (keywords: string[]): string => {
+        for (const kw of keywords) {
+          for (const [cleanH, colIdx] of Object.entries(headerMap)) {
+            if (cleanH.includes(kw)) {
+              const val = raw[colIdx];
+              if (val != null && String(val).trim() !== '') {
+                return String(val).trim();
+              }
+            }
+          }
+        }
+        return '';
+      };
+
+      record.stt = getByHeaderKey(['stt', 'sott']) || String(raw[0] ?? index + 1).trim();
+      record.soHoSo = getByHeaderKey(['sohoso', 'mahoso', 'shs']);
+      record.quyTrinh = getByHeaderKey(['quytrinh', 'thutuc', 'tentrutuc']);
+      record.boPhanHienTai = getByHeaderKey(['bophanhientai', 'bophan', 'phongban']);
+      record.menuHienTai = getByHeaderKey(['menuhientai', 'menu', 'buocxuly', 'trangthaixuly']);
+      record.tenDonVi = getByHeaderKey(['tendonvi', 'hoten', 'chuhoso', 'nguoinop']);
+      record.coQuanXuLy = getByHeaderKey(['coquan', 'donvixuly']);
+      record.canBoXuLy = getByHeaderKey(['canbo', 'nguoixuly']);
+      record.ngayNhan = getByHeaderKey(['ngaynhan', 'tiepnhan']);
+      record.ngayTra = getByHeaderKey(['hantra', 'ngayhen', 'ngaytra']);
+      record.traThucTe = getByHeaderKey(['trathucte', 'ngaytrathucte', 'thucte']);
+      return record;
+    }
+
+    // Fallback if no header map: detect column positions by pattern
+    record.stt = String(raw[0] ?? index + 1).trim();
+    record.soHoSo = String(raw[1] ?? '').trim();
+    record.quyTrinh = String(raw[2] ?? '').trim();
+
+    // If 11 or more columns, check if raw[3] or raw[9] looks like boPhan
+    if (raw.length >= 11) {
+      // If col 9 and 10 exist, check if col 3 is boPhan or tenDonVi
+      record.boPhanHienTai = String(raw[3] ?? '').trim();
+      record.menuHienTai = String(raw[4] ?? '').trim();
+      record.tenDonVi = String(raw[5] ?? '').trim();
+      record.coQuanXuLy = String(raw[6] ?? '').trim();
+      record.canBoXuLy = String(raw[7] ?? '').trim();
+      record.ngayNhan = String(raw[8] ?? '').trim();
+      record.ngayTra = String(raw[9] ?? '').trim();
+      record.traThucTe = String(raw[10] ?? '').trim();
+    } else {
+      record.tenDonVi = String(raw[3] ?? '').trim();
+      record.coQuanXuLy = String(raw[4] ?? '').trim();
+      record.canBoXuLy = String(raw[5] ?? '').trim();
+      record.ngayNhan = String(raw[6] ?? '').trim();
+      record.ngayTra = String(raw[7] ?? '').trim();
+      record.traThucTe = String(raw[8] ?? '').trim();
+      record.boPhanHienTai = String(raw[9] ?? '').trim();
+      record.menuHienTai = String(raw[10] ?? '').trim();
+    }
+    return record;
   }
 
-  // Flexible key finder (case-insensitive & accent-friendly matching)
-  const getVal = (possibleKeys: string[]): string => {
-    // 1. Direct match
-    for (const key of possibleKeys) {
-      if (raw[key] !== undefined && raw[key] !== null && String(raw[key]).trim() !== '') {
-        return String(raw[key]).trim();
+  // Case 2: raw is an object { "BỘ PHẬN HIỆN TẠI": "...", ... }
+  if (typeof raw === 'object') {
+    if (raw.rowIndex != null) {
+      record.rowIndex = Number(raw.rowIndex) || (index + 2);
+    }
+
+    // Direct key matches first
+    for (const key of Object.keys(raw)) {
+      const k = cleanKey(key);
+      const val = raw[key] != null ? String(raw[key]).trim() : '';
+      if (!val) continue;
+
+      if ((k.includes('bophanhientai') || k.includes('bophan') || k.includes('phongban')) && !record.boPhanHienTai) {
+        record.boPhanHienTai = val;
+      } else if ((k.includes('menuhientai') || k.includes('menu') || k.includes('buocxuly')) && !record.menuHienTai) {
+        record.menuHienTai = val;
+      } else if ((k.includes('sohoso') || k.includes('mahoso') || k === 'shs') && !record.soHoSo) {
+        record.soHoSo = val;
+      } else if ((k.includes('quytrinh') || k.includes('thutuc')) && !record.quyTrinh) {
+        record.quyTrinh = val;
+      } else if ((k.includes('tendonvi') || k.includes('hoten') || k.includes('chuhoso') || k.includes('nguoinop')) && !record.tenDonVi) {
+        record.tenDonVi = val;
+      } else if ((k.includes('coquan') || k.includes('donvixuly')) && !record.coQuanXuLy) {
+        record.coQuanXuLy = val;
+      } else if ((k.includes('canbo') || k.includes('nguoixuly')) && !record.canBoXuLy) {
+        record.canBoXuLy = val;
+      } else if ((k.includes('ngaynhan') || k.includes('tiepnhan')) && !record.ngayNhan) {
+        record.ngayNhan = val;
+      } else if ((k.includes('hantra') || k.includes('ngayhen') || (k.includes('ngaytra') && !k.includes('thucte'))) && !record.ngayTra) {
+        record.ngayTra = val;
+      } else if ((k.includes('trathucte') || k.includes('thucte')) && !record.traThucTe) {
+        record.traThucTe = val;
+      } else if (k === 'stt' && !record.stt) {
+        record.stt = val;
       }
     }
-    // 2. Case-insensitive / whitespace-stripped match
-    const simplifiedTargets = possibleKeys.map((k) =>
-      k.toLowerCase().replace(/[\s_\-\/]/g, '')
-    );
-    for (const rawKey of Object.keys(raw)) {
-      const cleanRawKey = rawKey.toLowerCase().replace(/[\s_\-\/]/g, '');
-      if (simplifiedTargets.includes(cleanRawKey)) {
-        const val = raw[rawKey];
-        if (val !== undefined && val !== null && String(val).trim() !== '') {
-          return String(val).trim();
-        }
-      }
-    }
-    return '';
-  };
+  }
 
-  const boPhan = getVal([
-    'BỘ PHẬN HIỆN TẠI',
-    'Bộ phận hiện tại',
-    'Bộ Phận Hiện Tại',
-    'boPhanHienTai',
-    'bo_phan_hien_tai',
-    'BỘ PHẬN',
-    'Bộ phận',
-    'boPhan',
-    'Phòng ban',
-    'phongBan',
-  ]);
-
-  const menu = getVal([
-    'MENU HIỆN TẠI',
-    'Menu hiện tại',
-    'Menu Hiện Tại',
-    'menuHienTai',
-    'menu_hien_tai',
-    'MENU',
-    'Menu',
-    'menu',
-    'Trạng thái xử lý',
-    'Bước xử lý',
-    'trangThaiXuLy',
-  ]);
-
-  return {
-    rowIndex: Number(raw.rowIndex) || (index + 2),
-    stt: getVal(['STT', 'stt', 'Số TT', 'Số thứ tự']) || String(index + 1),
-    soHoSo: getVal(['soHoSo', 'SỐ HỒ SƠ', 'Số hồ sơ', 'Số Hồ Sơ', 'Mã hồ sơ', 'maHoSo']),
-    quyTrinh: getVal(['quyTrinh', 'QUY TRÌNH', 'Quy trình', 'Tên quy trình', 'Tên thủ tục', 'thuTuc']),
-    boPhanHienTai: boPhan,
-    menuHienTai: menu,
-    tenDonVi: getVal(['tenDonVi', 'TÊN ĐƠN VỊ / HỌ TÊN', 'Tên đơn vị / Họ tên', 'Tên đơn vị', 'Họ tên', 'Chủ hồ sơ', 'Người nộp']),
-    coQuanXuLy: getVal(['coQuanXuLy', 'CƠ QUAN XỬ LÝ', 'Cơ quan xử lý', 'Cơ quan', 'Đơn vị xử lý']),
-    canBoXuLy: getVal(['canBoXuLy', 'CÁN BỘ XỬ LÝ', 'Cán bộ xử lý', 'Cán bộ', 'Người xử lý']),
-    ngayNhan: getVal(['ngayNhan', 'NGÀY NHẬN', 'Ngày nhận', 'Ngày tiếp nhận']),
-    ngayTra: getVal(['ngayTra', 'HẠN TRẢ', 'Hạn trả', 'NGÀY TRẢ', 'Ngày trả', 'Hạn trả kết quả']),
-    traThucTe: getVal(['traThucTe', 'TRẢ THỰC TẾ', 'Trả thực tế', 'Ngày trả thực tế']),
-  };
+  return record;
 }
 
 export async function fetchSheetData(
@@ -140,13 +169,41 @@ export async function fetchSheetData(
       throw new Error(data.message || 'Lỗi từ Apps Script');
     }
 
-    const rawList: any[] = Array.isArray(data)
-      ? data
-      : Array.isArray(data.data)
-      ? data.data
-      : [];
+    let rawList: any[] = [];
+    if (Array.isArray(data)) {
+      rawList = data;
+    } else if (Array.isArray(data.data)) {
+      rawList = data.data;
+    } else if (Array.isArray(data.records)) {
+      rawList = data.records;
+    } else if (Array.isArray(data.rows)) {
+      rawList = data.rows;
+    }
 
-    const records: SheetRecord[] = rawList.map((item, idx) => normalizeRecord(item, idx));
+    // Check if rawList has a header row (for 2D array from sheet.getDataRange().getValues())
+    let headerMap: Record<string, number> | undefined;
+    let dataRows = rawList;
+
+    if (rawList.length > 0 && Array.isArray(rawList[0])) {
+      const firstRowKeys = rawList[0].map((cell: any) => cleanKey(String(cell)));
+      const isHeaderRow = firstRowKeys.some((k: string) =>
+        ['stt', 'sohoso', 'mahoso', 'quytrinh', 'bophan', 'menu', 'hantra', 'ngaynhan'].some(
+          (term) => k.includes(term)
+        )
+      );
+
+      if (isHeaderRow) {
+        headerMap = {};
+        firstRowKeys.forEach((k: string, idx: number) => {
+          if (k) headerMap![k] = idx;
+        });
+        dataRows = rawList.slice(1);
+      }
+    }
+
+    const records: SheetRecord[] = dataRows.map((item, idx) =>
+      normalizeRecord(item, idx, headerMap)
+    );
 
     return { records, sheetName: data.sheetName || 'Sheet dữ liệu' };
   } catch (error: any) {
@@ -171,6 +228,7 @@ export async function markRecordCompleted(
         'Content-Type': 'text/plain;charset=utf-8',
       },
       body: JSON.stringify({
+        action: 'markComplete',
         rowIndex: rowIndex,
         timestamp: timestampStr,
       }),
@@ -193,82 +251,34 @@ export async function markRecordCompleted(
   }
 }
 
-export const SAMPLE_APPS_SCRIPT_CODE = `// Mã Google Apps Script đồng bộ 2 chiều với ứng dụng Deadline
-// Hỗ trợ hiển thị đầy đủ: STT, Số hồ sơ, Quy trình, Bộ phận hiện tại, Menu hiện tại,...
-
-function doGet(e) {
+export async function updateRecordField(
+  webAppUrl: string,
+  rowIndex: number,
+  columnName: string,
+  value: string
+): Promise<boolean> {
   try {
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var sheet = ss.getActiveSheet();
-    var data = sheet.getDataRange().getValues();
-    
-    if (data.length <= 1) {
-      return ContentService.createTextOutput(JSON.stringify({ status: 'success', data: [] }))
-        .setMimeType(ContentService.MimeType.JSON);
-    }
-    
-    var headers = data[0].map(function(h) { return String(h).trim(); });
-    var records = [];
-    
-    for (var i = 1; i < data.length; i++) {
-      var row = data[i];
-      // Bỏ qua dòng trống
-      if (!row.some(function(cell) { return cell !== '' && cell !== null; })) continue;
-      
-      var record = { rowIndex: i + 1 };
-      for (var j = 0; j < headers.length; j++) {
-        var header = headers[j];
-        var val = row[j];
-        if (val instanceof Date) {
-          record[header] = Utilities.formatDate(val, Session.getScriptTimeZone(), "dd/MM/yyyy HH:mm");
-        } else {
-          record[header] = val != null ? String(val) : '';
-        }
-      }
-      records.push(record);
-    }
-    
-    return ContentService.createTextOutput(JSON.stringify({ 
-      status: 'success', 
-      sheetName: sheet.getName(),
-      data: records 
-    })).setMimeType(ContentService.MimeType.JSON);
-  } catch (err) {
-    return ContentService.createTextOutput(JSON.stringify({ status: 'error', message: err.toString() }))
-      .setMimeType(ContentService.MimeType.JSON);
+    if (!webAppUrl) return false;
+
+    const res = await fetch(webAppUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/plain;charset=utf-8',
+      },
+      body: JSON.stringify({
+        action: 'updateField',
+        rowIndex: rowIndex,
+        columnName: columnName,
+        value: value,
+      }),
+    });
+
+    if (!res.ok) return false;
+    const data = await res.json();
+    return data.status === 'success';
+  } catch (error) {
+    console.error('updateRecordField error:', error);
+    return false;
   }
 }
 
-function doPost(e) {
-  try {
-    var contents = JSON.parse(e.postData.contents);
-    var rowIndex = contents.rowIndex;
-    var timestamp = contents.timestamp;
-    
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var sheet = ss.getActiveSheet();
-    var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-    
-    // Tự động tìm vị trí cột TRẢ THỰC TẾ
-    var colIndex = -1;
-    for (var c = 0; c < headers.length; c++) {
-      var h = String(headers[c]).toUpperCase().trim();
-      if (h === 'TRẢ THỰC TẾ' || h === 'NGÀY TRẢ THỰC TẾ') {
-        colIndex = c + 1;
-        break;
-      }
-    }
-    if (colIndex === -1) {
-      colIndex = headers.length; // Mặc định cột cuối nếu không tìm thấy
-    }
-    
-    sheet.getRange(rowIndex, colIndex).setValue(timestamp);
-    
-    return ContentService.createTextOutput(JSON.stringify({ status: 'success' }))
-      .setMimeType(ContentService.MimeType.JSON);
-  } catch (err) {
-    return ContentService.createTextOutput(JSON.stringify({ status: 'error', message: err.toString() }))
-      .setMimeType(ContentService.MimeType.JSON);
-  }
-}
-`;

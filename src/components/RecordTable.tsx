@@ -151,7 +151,7 @@ export function RecordTable({
 
   const handleMarkComplete = async (record: SheetRecord) => {
     const confirmed = window.confirm(
-      `Bạn có chắc chắn muốn đánh dấu hoàn thành hồ sơ ${record.soHoSo}? Thao tác này sẽ ghi nhận thời gian trả thực tế vào Google Sheet.`
+      `Bạn có chắc chắn muốn đánh dấu hoàn thành hồ sơ ${record.soHoSo}? Thao tác này sẽ ghi nhận thời gian trả thực tế vào hệ thống.`
     );
     if (!confirmed) return;
 
@@ -173,7 +173,7 @@ export function RecordTable({
     if (success) {
       onRefresh();
     } else {
-      alert('Có lỗi xảy ra khi cập nhật Google Sheet qua Apps Script.');
+      alert('Có lỗi xảy ra khi cập nhật dữ liệu.');
     }
   };
 
@@ -279,12 +279,8 @@ export function RecordTable({
               <th className="px-3 py-3 w-12 text-center">STT</th>
               <th className="px-3 py-3 whitespace-nowrap">Số Hồ Sơ</th>
               <th className="px-3 py-3 min-w-[140px]">Quy Trình</th>
-              <th className="px-3 py-3 min-w-[130px] text-emerald-800 bg-emerald-50/50">
-                Bộ Phận Hiện Tại
-              </th>
-              <th className="px-3 py-3 min-w-[130px] text-blue-800 bg-blue-50/50">
-                Menu Hiện Tại
-              </th>
+              <th className="px-3 py-3 min-w-[140px]">Bộ Phận Hiện Tại</th>
+              <th className="px-3 py-3 min-w-[140px]">Menu Hiện Tại</th>
               <th className="px-3 py-3 min-w-[160px]">Tên Đơn Vị / Họ Tên</th>
               <th className="px-3 py-3 min-w-[150px]">Cơ Quan / Cán Bộ XL</th>
               <th className="px-3 py-3 whitespace-nowrap">Ngày Nhận</th>
@@ -337,25 +333,19 @@ export function RecordTable({
                     </td>
 
                     {/* BỘ PHẬN HIỆN TẠI */}
-                    <td className="px-3 py-3 bg-emerald-50/20">
-                      {record.boPhanHienTai ? (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-100/70 text-emerald-900 border border-emerald-200 max-w-[180px] truncate" title={record.boPhanHienTai}>
-                          {record.boPhanHienTai}
-                        </span>
-                      ) : (
-                        <span className="text-slate-400 text-xs italic">-</span>
-                      )}
+                    <td
+                      className="px-3 py-3 text-slate-700 max-w-[180px] truncate"
+                      title={record.boPhanHienTai}
+                    >
+                      {record.boPhanHienTai || '-'}
                     </td>
 
                     {/* MENU HIỆN TẠI */}
-                    <td className="px-3 py-3 bg-blue-50/20">
-                      {record.menuHienTai ? (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-blue-100/70 text-blue-900 border border-blue-200 max-w-[180px] truncate" title={record.menuHienTai}>
-                          {record.menuHienTai}
-                        </span>
-                      ) : (
-                        <span className="text-slate-400 text-xs italic">-</span>
-                      )}
+                    <td
+                      className="px-3 py-3 text-slate-700 max-w-[180px] truncate"
+                      title={record.menuHienTai}
+                    >
+                      {record.menuHienTai || '-'}
                     </td>
 
                     <td
