@@ -27,20 +27,33 @@ export default defineConfig(() => {
                 redirect: 'follow',
               });
 
-              const contentType = response.headers.get('content-type') || 'application/json';
               const body = await response.text();
 
               res.setHeader('Access-Control-Allow-Origin', '*');
               res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
               res.setHeader('Access-Control-Allow-Headers', '*');
-              res.setHeader('Content-Type', contentType);
-              res.statusCode = response.status;
-              res.end(body);
+              res.setHeader('Content-Type', 'application/json');
+              res.statusCode = 200;
+              res.end(
+                JSON.stringify({
+                  httpStatus: response.status,
+                  statusText: response.statusText,
+                  ok: response.ok,
+                  body: body,
+                  contentType: response.headers.get('content-type') || '',
+                })
+              );
             } catch (err: any) {
-              res.statusCode = 500;
+              res.statusCode = 200;
               res.setHeader('Access-Control-Allow-Origin', '*');
               res.setHeader('Content-Type', 'application/json');
-              res.end(JSON.stringify({ error: err.message || 'Proxy request failed' }));
+              res.end(
+                JSON.stringify({
+                  httpStatus: 500,
+                  ok: false,
+                  error: err.message || 'Proxy request failed',
+                })
+              );
             }
           });
         },

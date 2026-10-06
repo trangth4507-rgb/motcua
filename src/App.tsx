@@ -6,6 +6,7 @@ import {
   saveCompletedOverride,
   removeCompletedOverride,
   saveCompletedOverridesBatch,
+  getDemoRecords,
 } from './lib/sheets';
 import { RecordTable } from './components/RecordTable';
 import {
@@ -17,6 +18,12 @@ import {
   CheckCircle2,
   Maximize2,
   Minimize2,
+  Sparkles,
+  HelpCircle,
+  Copy,
+  Check,
+  X,
+  BookOpen,
 } from 'lucide-react';
 import { cn } from './lib/utils';
 import { parseDate, calculateTimeRemaining } from './lib/dateUtils';
@@ -29,6 +36,8 @@ export default function App() {
   const [records, setRecords] = useState<SheetRecord[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showGuideModal, setShowGuideModal] = useState(false);
+  const [hasCopiedCode, setHasCopiedCode] = useState(false);
 
   // Full landscape mode enabled by default for maximum widescreen viewing
   const [isFullLandscape, setIsFullLandscape] = useState<boolean>(() => {
@@ -76,6 +85,55 @@ export default function App() {
 
   const handleRefresh = () => {
     loadData();
+  };
+
+  const handleLoadDemoData = () => {
+    const demo = getDemoRecords();
+    setRecords(demo);
+    setSheetName('Dữ liệu mô phỏng Một cửa điện tử');
+    setError(null);
+  };
+
+  const copyAppsScriptCode = () => {
+    const code = `function doGet(e) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  var data = sheet.getDataRange().getValues();
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    data: data,
+    sheetName: sheet.getName()
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function doPost(e) {
+  try {
+    var params = JSON.parse(e.postData.contents);
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+    var action = params.action;
+    
+    if (action === "markComplete") {
+      var rowIndex = params.rowIndex;
+      var timestamp = params.timestamp || new Date().toLocaleString("vi-VN");
+      // Cột K (cột 11) là cột Trả thực tế
+      sheet.getRange(rowIndex, 11).setValue(timestamp);
+      return ContentService.createTextOutput(JSON.stringify({ status: "success" })).setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    if (action === "markMultipleComplete") {
+      var rowIndices = params.rowIndices || [];
+      var timestamp = params.timestamp || new Date().toLocaleString("vi-VN");
+      for (var i = 0; i < rowIndices.length; i++) {
+        sheet.getRange(rowIndices[i], 11).setValue(timestamp);
+      }
+      return ContentService.createTextOutput(JSON.stringify({ status: "success", count: rowIndices.length })).setMimeType(ContentService.MimeType.JSON);
+    }
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "error", message: err.toString() })).setMimeType(ContentService.MimeType.JSON);
+  }
+}`;
+    navigator.clipboard.writeText(code);
+    setHasCopiedCode(true);
+    setTimeout(() => setHasCopiedCode(false), 3000);
   };
 
   const handleUpdateRecordCompleted = (rowIndex: number, timestampStr: string, soHoSo?: string) => {
@@ -256,21 +314,38 @@ export default function App() {
                 </span>
               </label>
             </div>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <input
                 type="text"
                 value={webAppUrl}
                 onChange={(e) => setWebAppUrl(e.target.value)}
-                placeholder="Nhập đường dẫn Web App URL..."
-                className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all font-mono"
+                placeholder="Nhập Web App URL (kết thúc bằng /exec) hoặc liên kết Google Sheets..."
+                className="flex-1 min-w-[280px] rounded-lg border border-slate-300 px-3 py-2 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all font-mono"
               />
               <button
                 onClick={() => loadData(webAppUrl)}
                 disabled={isLoading || !webAppUrl}
-                className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors shadow-sm disabled:opacity-50 whitespace-nowrap"
+                className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors shadow-sm disabled:opacity-50 whitespace-nowrap cursor-pointer"
               >
                 <RefreshCw className={cn('w-4 h-4', isLoading && 'animate-spin')} />
                 <span>{isLoading ? 'Đang tải...' : 'Tải lại dữ liệu'}</span>
+              </button>
+              <button
+                onClick={handleLoadDemoData}
+                className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors shadow-2xs whitespace-nowrap cursor-pointer"
+                title="Tải 8 hồ sơ mẫu để thử nghiệm tính năng ngay mà không cần đợi kết nối"
+              >
+                <Sparkles className="w-4 h-4 text-emerald-600" />
+                <span>Dùng dữ liệu mẫu</span>
+              </button>
+              <button
+                onClick={() => setShowGuideModal(true)}
+                className="flex items-center gap-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 px-3 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors shadow-2xs whitespace-nowrap cursor-pointer"
+                title="Xem hướng dẫn cách lấy Web App URL chính xác từ Google Sheets"
+              >
+                <HelpCircle className="w-4 h-4 text-blue-600" />
+                <span className="hidden sm:inline">Hướng dẫn Apps Script</span>
+                <span className="sm:hidden">Hướng dẫn</span>
               </button>
             </div>
           </div>
@@ -323,11 +398,33 @@ export default function App() {
 
         {/* Error notification */}
         {error && (
-          <div className="p-4 bg-red-50 text-red-700 rounded-xl border border-red-200 flex items-start gap-3 shadow-sm">
-            <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5 text-red-600" />
-            <div className="flex-1">
-              <div className="font-semibold text-sm">Lỗi khi tải dữ liệu</div>
-              <div className="text-xs sm:text-sm mt-0.5 opacity-90">{error}</div>
+          <div className="p-4 bg-red-50 text-red-800 rounded-xl border border-red-300 flex flex-col gap-3 shadow-sm animate-in fade-in duration-200">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5 text-red-600" />
+              <div className="flex-1 min-w-0">
+                <div className="font-bold text-sm text-red-900 mb-1">
+                  Thông báo lỗi khi tải dữ liệu
+                </div>
+                <div className="text-xs sm:text-sm text-red-800 whitespace-pre-line leading-relaxed">
+                  {error}
+                </div>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-red-200/80 pl-8">
+              <button
+                onClick={handleLoadDemoData}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs transition-colors cursor-pointer"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Tải dữ liệu mẫu để thử nghiệm giao diện ngay</span>
+              </button>
+              <button
+                onClick={() => setShowGuideModal(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white hover:bg-red-100 text-red-800 border border-red-300 text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
+              >
+                <HelpCircle className="w-3.5 h-3.5 text-red-600" />
+                <span>Xem hướng dẫn lấy Web App URL chính xác</span>
+              </button>
             </div>
           </div>
         )}
@@ -377,6 +474,139 @@ export default function App() {
           )}
         </div>
       </main>
+
+      {/* Guide Modal */}
+      {showGuideModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl max-w-2xl w-full shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="px-6 py-4 bg-emerald-700 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <BookOpen className="w-5 h-5 text-emerald-200" />
+                <h3 className="font-bold text-base sm:text-lg">
+                  Hướng dẫn cài đặt & lấy Web App URL Google Sheets
+                </h3>
+              </div>
+              <button
+                onClick={() => setShowGuideModal(false)}
+                className="p-1.5 hover:bg-emerald-800 rounded-lg text-emerald-100 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 overflow-y-auto space-y-5 text-xs sm:text-sm text-slate-700">
+              <div className="space-y-2">
+                <h4 className="font-bold text-slate-900 text-sm flex items-center gap-1.5">
+                  <span className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center text-xs font-bold">1</span>
+                  <span>Mở Apps Script trên Google Sheets</span>
+                </h4>
+                <p className="text-slate-600 pl-6">
+                  Mở bảng tính Google Sheets của bạn ➔ trên thanh công cụ chọn menu <strong>Tiện ích mở rộng (Extensions)</strong> ➔ chọn <strong>Apps Script</strong>.
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <h4 className="font-bold text-slate-900 text-sm flex items-center gap-1.5">
+                  <span className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center text-xs font-bold">2</span>
+                  <span>Dán mã Apps Script chuẩn kết nối</span>
+                </h4>
+                <p className="text-slate-600 pl-6">
+                  Xóa toàn bộ mã cũ trong file <code>Mã.gs</code> (Code.gs) và dán đoạn mã bên dưới:
+                </p>
+                <div className="pl-6">
+                  <div className="bg-slate-900 rounded-xl p-3 text-slate-200 font-mono text-xs relative overflow-x-auto max-h-48 border border-slate-800">
+                    <button
+                      onClick={copyAppsScriptCode}
+                      className="absolute top-2 right-2 bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1 rounded text-xs font-sans font-semibold flex items-center gap-1 transition-colors cursor-pointer shadow-sm"
+                    >
+                      {hasCopiedCode ? (
+                        <>
+                          <Check className="w-3.5 h-3.5" />
+                          <span>Đã sao chép!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5" />
+                          <span>Sao chép mã</span>
+                        </>
+                      )}
+                    </button>
+                    <pre className="pr-24 leading-relaxed">
+{`function doGet(e) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  var data = sheet.getDataRange().getValues();
+  return ContentService.createTextOutput(JSON.stringify({
+    status: "success",
+    data: data,
+    sheetName: sheet.getName()
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+function doPost(e) {
+  try {
+    var params = JSON.parse(e.postData.contents);
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+    if (params.action === "markComplete") {
+      sheet.getRange(params.rowIndex, 11).setValue(params.timestamp);
+      return ContentService.createTextOutput(JSON.stringify({ status: "success" })).setMimeType(ContentService.MimeType.JSON);
+    }
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "error", message: err.toString() })).setMimeType(ContentService.MimeType.JSON);
+  }
+}`}
+                    </pre>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <h4 className="font-bold text-slate-900 text-sm flex items-center gap-1.5">
+                  <span className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center text-xs font-bold">3</span>
+                  <span>Triển khai ứng dụng web (Deploy)</span>
+                </h4>
+                <div className="pl-6 space-y-1.5 text-slate-600">
+                  <p>• Nhấn nút <strong>Triển khai (Deploy)</strong> màu xanh ở góc trên bên phải ➔ chọn <strong>Bản triển khai mới (New deployment)</strong>.</p>
+                  <p>• Nhấn vào biểu tượng bánh răng ⚙️ bên cạnh 'Chọn loại' ➔ chọn <strong>Ứng dụng web (Web app)</strong>.</p>
+                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-900 text-xs font-medium space-y-1 my-2">
+                    <p className="font-bold text-amber-950">⚠️ BẮT BUỘC THIẾT LẬP 2 MỤC SAU:</p>
+                    <p>1. <strong>Thực thi dưới dạng (Execute as):</strong> Chọn <code>Tôi (Me)</code></p>
+                    <p>2. <strong>Người có quyền truy cập (Who has access):</strong> Chọn <code>Bất kỳ ai (Anyone)</code></p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <h4 className="font-bold text-slate-900 text-sm flex items-center gap-1.5">
+                  <span className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center text-xs font-bold">4</span>
+                  <span>Sao chép URL Web App</span>
+                </h4>
+                <p className="text-slate-600 pl-6">
+                  Bấm <strong>Triển khai</strong> ➔ Hệ thống sẽ cấp một đường dẫn <strong>URL ứng dụng web</strong> (kết thúc bằng <code>/exec</code>). Sao chép đường dẫn này và dán vào ô Web App URL của trang này.
+                </p>
+              </div>
+            </div>
+
+            <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-2">
+              <button
+                onClick={() => setShowGuideModal(false)}
+                className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg font-semibold text-xs cursor-pointer transition-colors"
+              >
+                Đóng
+              </button>
+              <button
+                onClick={() => {
+                  setShowGuideModal(false);
+                  handleLoadDemoData();
+                }}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-semibold text-xs cursor-pointer transition-colors flex items-center gap-1.5"
+              >
+                <Sparkles className="w-4 h-4" />
+                <span>Thử với dữ liệu mẫu trước</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

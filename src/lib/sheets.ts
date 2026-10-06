@@ -256,6 +256,140 @@ function parseGvizResponse(rawText: string): { records: SheetRecord[]; sheetName
   return { records, sheetName: 'Google Spreadsheet' };
 }
 
+export function getDemoRecords(): SheetRecord[] {
+  const now = new Date();
+  const formatTime = (d: Date) => {
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+
+  // Create dates relative to now
+  const dMinus2h = new Date(now.getTime() - 2 * 3600 * 1000);
+  const dMinus30m = new Date(now.getTime() - 30 * 60 * 1000);
+  const dPlus25m = new Date(now.getTime() + 25 * 60 * 1000);
+  const dPlus2h = new Date(now.getTime() + 2 * 3600 * 1000);
+  const dPlus6h = new Date(now.getTime() + 6 * 3600 * 1000);
+  const dPlus1d = new Date(now.getTime() + 26 * 3600 * 1000);
+  const dPlus2d = new Date(now.getTime() + 52 * 3600 * 1000);
+  const dPlus5d = new Date(now.getTime() + 120 * 3600 * 1000);
+  const dMinus5d = new Date(now.getTime() - 120 * 3600 * 1000);
+
+  return [
+    {
+      rowIndex: 2,
+      stt: '1',
+      soHoSo: 'H47.01-261005-0012',
+      quyTrinh: 'Đăng ký thành lập hộ kinh doanh cá thể',
+      boPhanHienTai: 'Bộ phận Tiếp nhận & Trả kết quả (Một cửa)',
+      menuHienTai: 'Đang xử lý - Chờ thẩm định hồ sơ',
+      tenDonVi: 'Nguyễn Văn An (Cửa hàng Bách Hóa An Khang)',
+      coQuanXuLy: 'UBND Huyện - Phòng Tài chính Kế hoạch',
+      canBoXuLy: 'Trần Thị Mai',
+      ngayNhan: formatTime(dMinus5d),
+      ngayTra: formatTime(dPlus25m),
+      traThucTe: '',
+    },
+    {
+      rowIndex: 3,
+      stt: '2',
+      soHoSo: 'H47.02-261005-0045',
+      quyTrinh: 'Cấp Giấy chứng nhận quyền sử dụng đất lần đầu',
+      boPhanHienTai: 'Phòng Tài nguyên & Môi trường',
+      menuHienTai: 'Đang thẩm tra thực địa & xác minh',
+      tenDonVi: 'Lê Hoàng Minh & Nguyễn Thị Lan',
+      coQuanXuLy: 'Văn phòng Đăng ký đất đai',
+      canBoXuLy: 'Nguyễn Văn Tuấn',
+      ngayNhan: formatTime(dMinus5d),
+      ngayTra: formatTime(dPlus2h),
+      traThucTe: '',
+    },
+    {
+      rowIndex: 4,
+      stt: '3',
+      soHoSo: 'H47.03-261005-0089',
+      quyTrinh: 'Cấp giấy phép xây dựng nhà ở riêng lẻ đô thị',
+      boPhanHienTai: 'Phòng Quản lý Đô thị',
+      menuHienTai: 'Chờ lãnh đạo phòng phê duyệt',
+      tenDonVi: 'Phạm Thanh Bình (Công trình KĐT Mới)',
+      coQuanXuLy: 'UBND Huyện - Phòng QLĐT',
+      canBoXuLy: 'Vũ Đức Thịnh',
+      ngayNhan: formatTime(dMinus5d),
+      ngayTra: formatTime(dPlus6h),
+      traThucTe: '',
+    },
+    {
+      rowIndex: 5,
+      stt: '4',
+      soHoSo: 'H47.04-261005-0102',
+      quyTrinh: 'Xác nhận tình trạng hôn nhân (cho công dân cư trú)',
+      boPhanHienTai: 'Bộ phận Tư pháp - Hộ tịch',
+      menuHienTai: 'Đang tra cứu dữ liệu hộ tịch điện tử',
+      tenDonVi: 'Đỗ Thị Thu Hương',
+      coQuanXuLy: 'UBND Xã / Thị trấn',
+      canBoXuLy: 'Lê Thị Thu',
+      ngayNhan: formatTime(dMinus5d),
+      ngayTra: formatTime(dMinus30m),
+      traThucTe: '',
+    },
+    {
+      rowIndex: 6,
+      stt: '5',
+      soHoSo: 'H47.05-261005-0130',
+      quyTrinh: 'Thủ tục chuyển nhượng quyền sử dụng đất',
+      boPhanHienTai: 'Chi nhánh Văn phòng Đăng ký đất đai',
+      menuHienTai: 'Đã hoàn tất nghĩa vụ thuế, chờ in phôi',
+      tenDonVi: 'Hoàng Quốc Cường',
+      coQuanXuLy: 'Chi nhánh VP Đăng ký đất đai',
+      canBoXuLy: 'Bùi Văn Hùng',
+      ngayNhan: formatTime(dMinus5d),
+      ngayTra: formatTime(dMinus2h),
+      traThucTe: '',
+    },
+    {
+      rowIndex: 7,
+      stt: '6',
+      soHoSo: 'H47.06-261005-0155',
+      quyTrinh: 'Cấp đổi lại thẻ Bảo hiểm y tế do sai thông tin',
+      boPhanHienTai: 'Bảo hiểm xã hội huyện',
+      menuHienTai: 'Đã phê duyệt hồ sơ',
+      tenDonVi: 'Vũ Thị Ngọc Hà',
+      coQuanXuLy: 'BHXH Huyện',
+      canBoXuLy: 'Phạm Thị Thúy',
+      ngayNhan: formatTime(dMinus5d),
+      ngayTra: formatTime(dPlus1d),
+      traThucTe: '',
+    },
+    {
+      rowIndex: 8,
+      stt: '7',
+      soHoSo: 'H47.07-261005-0182',
+      quyTrinh: 'Cấp trích lục khai sinh từ sổ đăng ký hộ tịch',
+      boPhanHienTai: 'Bộ phận Tiếp nhận & Trả kết quả (Một cửa)',
+      menuHienTai: 'Chờ công dân đến nhận kết quả',
+      tenDonVi: 'Đinh Công Thành',
+      coQuanXuLy: 'UBND Phường / Xã',
+      canBoXuLy: 'Trần Hoài Nam',
+      ngayNhan: formatTime(dMinus5d),
+      ngayTra: formatTime(dPlus2d),
+      traThucTe: '',
+    },
+    {
+      rowIndex: 9,
+      stt: '8',
+      soHoSo: 'H47.08-261005-0210',
+      quyTrinh: 'Đăng ký biến động quyền sử dụng đất (đổi tên)',
+      boPhanHienTai: 'Bộ phận Tiếp nhận & Trả kết quả (Một cửa)',
+      menuHienTai: 'Đã trả kết quả cho công dân',
+      tenDonVi: 'Ngô Minh Tâm',
+      coQuanXuLy: 'Văn phòng Đăng ký đất đai',
+      canBoXuLy: 'Nguyễn Văn Tuấn',
+      ngayNhan: formatTime(dMinus5d),
+      ngayTra: formatTime(dMinus2h),
+      traThucTe: formatTime(dMinus2h),
+    },
+  ];
+}
+
 export async function fetchSheetData(
   webAppUrl: string
 ): Promise<{ records: SheetRecord[]; sheetName: string; error?: string }> {
@@ -283,8 +417,8 @@ export async function fetchSheetData(
           const proxyUrl = `/api/proxy?url=${encodeURIComponent(gvizUrl)}`;
           const pRes = await fetch(proxyUrl);
           if (pRes.ok) {
-            const txt = await pRes.text();
-            return parseGvizResponse(txt);
+            const pData = await pRes.json();
+            if (pData.body) return parseGvizResponse(pData.body);
           }
         }
       }
@@ -295,59 +429,75 @@ export async function fetchSheetData(
     const fetchUrl = `${cleanUrl}${separator}_t=${Date.now()}`;
 
     let responseText: string | null = null;
-    let fetchError: string | null = null;
+    let httpStatus: number = 200;
 
-    // 1. Direct browser fetch without custom headers to avoid CORS preflight rejection
+    // 1. First, call our server-side proxy which completely avoids CORS preflight restrictions
     try {
-      const res = await fetch(fetchUrl, {
-        method: 'GET',
-        redirect: 'follow',
-      });
-      if (res.ok) {
-        responseText = await res.text();
-      } else {
-        fetchError = `Máy chủ Web App phản hồi lỗi HTTP ${res.status} (${res.statusText})`;
+      const proxyUrl = `/api/proxy?url=${encodeURIComponent(fetchUrl)}`;
+      const pRes = await fetch(proxyUrl);
+      if (pRes.ok) {
+        const pData = await pRes.json();
+        httpStatus = pData.httpStatus || 200;
+        responseText = pData.body || '';
       }
-    } catch (err: any) {
-      fetchError = err?.message || 'Không thể kết nối đến Web App URL';
+    } catch {
+      // ignore
     }
 
-    // 2. If direct fetch failed (CORS or network policy), fallback to local backend proxy
+    // 2. If proxy was not reachable, try direct browser fetch
     if (!responseText) {
       try {
-        const proxyUrl = `/api/proxy?url=${encodeURIComponent(fetchUrl)}`;
-        const pRes = await fetch(proxyUrl);
-        if (pRes.ok) {
-          responseText = await pRes.text();
-          fetchError = null;
-        } else {
-          const pTxt = await pRes.text();
-          try {
-            const pErr = JSON.parse(pTxt);
-            if (pErr.error) fetchError = pErr.error;
-          } catch {
-            // ignore
-          }
-        }
-      } catch {
-        // keep fetchError
+        const res = await fetch(fetchUrl, {
+          method: 'GET',
+          redirect: 'follow',
+        });
+        httpStatus = res.status;
+        responseText = await res.text();
+      } catch (err: any) {
+        // Fetch failed directly
       }
     }
 
     if (!responseText) {
-      throw new Error(fetchError || 'Không thể tải dữ liệu từ Web App. Vui lòng kiểm tra lại URL.');
-    }
-
-    // 3. Inspect if response is HTML error page (common with Google login / permissions issue)
-    const trimmedText = responseText.trim();
-    if (trimmedText.startsWith('<!DOCTYPE html>') || trimmedText.startsWith('<html') || trimmedText.includes('accounts.google.com')) {
       throw new Error(
-        'Web App yêu cầu đăng nhập tài khoản Google. Vui lòng kiểm tra lại thiết lập xuất bản (Deploy) trong Apps Script: ' +
-        'Vào Tiện ích mở rộng ➔ Apps Script ➔ Triển khai (Deploy) ➔ Quản lý bản triển khai ➔ Thiết lập "Người có quyền truy cập" (Who has access) là "Bất kỳ ai" (Anyone).'
+        'Không thể kết nối đến Web App URL. Vui lòng kiểm tra lại kết nối mạng hoặc thử lại.'
       );
     }
 
-    // 4. Parse JSON
+    const trimmedText = responseText.trim();
+
+    // 3. Check for Google Drive 404 error (deployment does not exist)
+    if (
+      httpStatus === 404 ||
+      trimmedText.includes('Sorry, the file you have requested does not exist') ||
+      trimmedText.includes('<title>Page not found</title>')
+    ) {
+      throw new Error(
+        'ĐƯỜNG DẪN WEB APP KHÔNG TỒN TẠI (Lỗi 404 từ Google Drive):\n\n' +
+        'Google thông báo: "Sorry, the file you have requested does not exist."\n\n' +
+        '• Nguyên nhân: Mã bản triển khai (Deployment) này đã bị xóa, bị thay thế bằng phiên bản mới hoặc URL bị copy thiếu ký tự.\n\n' +
+        '• Cách khắc phục:\n' +
+        '1. Mở bảng tính Google Sheets của bạn.\n' +
+        '2. Vào menu "Tiện ích mở rộng" (Extensions) ➔ "Apps Script".\n' +
+        '3. Bấm nút "Triển khai" (Deploy) màu xanh ở góc trên bên phải ➔ "Quản lý bản triển khai" (Manage deployments).\n' +
+        '4. Sao chép lại URL Web App đang hoạt động (kết thúc bằng "/exec") và dán vào ô bên dưới.\n' +
+        '(Lưu ý: Thiết lập "Người có quyền truy cập" / Who has access phải chọn là "Bất kỳ ai" / Anyone).'
+      );
+    }
+
+    // 4. Check for Google login / permissions error
+    if (
+      trimmedText.includes('accounts.google.com') ||
+      trimmedText.includes('ServiceLogin') ||
+      (trimmedText.startsWith('<!DOCTYPE html>') && trimmedText.includes('Google Drive'))
+    ) {
+      throw new Error(
+        'WEB APP YÊU CẦU ĐĂNG NHẬP GOOGLE:\n\n' +
+        'Vui lòng vào Google Apps Script ➔ "Triển khai" ➔ "Quản lý bản triển khai" ➔ Chỉnh sửa và thiết lập "Người có quyền truy cập" (Who has access) là "Bất kỳ ai" (Anyone), sau đó Lưu và tải lại dữ liệu.'
+      );
+    }
+
+    // 5. Parse JSON
     let data: any;
     try {
       data = JSON.parse(trimmedText);
@@ -357,7 +507,9 @@ export async function fetchSheetData(
       if (callbackMatch) {
         data = JSON.parse(callbackMatch[1]);
       } else {
-        throw new Error('Dữ liệu trả về từ Web App không đúng định dạng JSON.');
+        throw new Error(
+          'Dữ liệu trả về từ Web App không đúng định dạng JSON. Vui lòng kiểm tra lại hàm doGet() trong Apps Script.'
+        );
       }
     }
 
@@ -365,7 +517,7 @@ export async function fetchSheetData(
       throw new Error(data.message || 'Lỗi xử lý từ Google Apps Script.');
     }
 
-    // 5. Extract rows list
+    // 6. Extract rows list
     let rawList: any[] = [];
     if (Array.isArray(data)) {
       rawList = data;
