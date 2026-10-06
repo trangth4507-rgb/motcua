@@ -7,6 +7,7 @@ import {
   removeCompletedOverride,
   saveCompletedOverridesBatch,
   getCompletedOverrides,
+  getRecordKey,
 } from '../lib/sheets';
 import {
   parseDate,
@@ -159,10 +160,11 @@ export function RecordTable({
         const ngayTraDate = parseDate(record.ngayTra);
         const ngayNhanDate = parseDate(record.ngayNhan);
 
-        // Check local override or recorded traThucTe
+        // Check local override or recorded traThucTe by unique record key (never pure rowIndex)
+        const recKey = getRecordKey(record);
         const overrideTimestamp =
-          localCompletedMap[String(record.rowIndex)] ||
-          (record.soHoSo ? localCompletedMap[`shs_${record.soHoSo.trim()}`] : undefined);
+          (record.soHoSo ? localCompletedMap[`shs_${record.soHoSo.trim()}`] : undefined) ||
+          localCompletedMap[recKey];
         const traThucTe = (record.traThucTe && record.traThucTe.trim().length > 0)
           ? record.traThucTe
           : (overrideTimestamp || '');
@@ -425,14 +427,15 @@ export function RecordTable({
   // 1. Single mark complete: INSTANT optimistic update, NO blocking window.confirm, moves down immediately
   const handleMarkComplete = (record: SheetRecord) => {
     const todayStr = getCurrentDateStr();
+    const recKey = getRecordKey(record);
 
     // 1. Optimistic instant local update
     setLocalCompletedMap((prev) => ({
       ...prev,
-      [String(record.rowIndex)]: todayStr,
+      [recKey]: todayStr,
       ...(record.soHoSo ? { [`shs_${record.soHoSo.trim()}`]: todayStr } : {}),
     }));
-    saveCompletedOverride(record.rowIndex, record.soHoSo, todayStr);
+    saveCompletedOverride(record, todayStr);
 
     if (onUpdateRecord) {
       onUpdateRecord(record.rowIndex, todayStr, record.soHoSo);
@@ -466,13 +469,15 @@ export function RecordTable({
 
   // 2. Undo complete: Returns record back to uncompleted section immediately
   const handleUndoComplete = (record: SheetRecord) => {
+    const recKey = getRecordKey(record);
     setLocalCompletedMap((prev) => {
       const next = { ...prev };
+      delete next[recKey];
       delete next[String(record.rowIndex)];
       if (record.soHoSo) delete next[`shs_${record.soHoSo.trim()}`];
       return next;
     });
-    removeCompletedOverride(record.rowIndex, record.soHoSo);
+    removeCompletedOverride(record);
 
     if (onUndoRecord) {
       onUndoRecord(record.rowIndex, record.soHoSo);
@@ -500,14 +505,21 @@ export function RecordTable({
     setLocalCompletedMap((prev) => {
       const next = { ...prev };
       targetRecords.forEach((r) => {
-        next[String(r.rowIndex)] = todayStr;
+        const k = getRecordKey(r);
+        next[k] = todayStr;
         if (r.soHoSo) next[`shs_${r.soHoSo.trim()}`] = todayStr;
       });
       return next;
     });
 
     saveCompletedOverridesBatch(
-      targetRecords.map((r) => ({ rowIndex: r.rowIndex, soHoSo: r.soHoSo })),
+      targetRecords.map((r) => ({
+        rowIndex: r.rowIndex,
+        soHoSo: r.soHoSo,
+        tenDonVi: r.tenDonVi,
+        quyTrinh: r.quyTrinh,
+        ngayNhan: r.ngayNhan,
+      })),
       todayStr
     );
 

@@ -163,6 +163,26 @@ export function normalizeRecord(raw: any, index: number, headerMap?: Record<stri
   return record;
 }
 
+export function getRecordKey(rec: {
+  rowIndex?: number;
+  soHoSo?: string;
+  tenDonVi?: string;
+  quyTrinh?: string;
+  ngayNhan?: string;
+}): string {
+  if (rec.soHoSo && rec.soHoSo.trim()) {
+    return `shs_${rec.soHoSo.trim()}`;
+  }
+  const cleanOwner = cleanKey(rec.tenDonVi || '');
+  const cleanProc = cleanKey(rec.quyTrinh || '');
+  const cleanDate = cleanKey(rec.ngayNhan || '');
+  const identity = `${cleanOwner}_${cleanProc}_${cleanDate}`;
+  if (identity.replace(/_/g, '').length > 2) {
+    return `rec_${identity}`;
+  }
+  return `row_${rec.rowIndex ?? 0}`;
+}
+
 const COMPLETED_STORAGE_KEY = 'deadline_completed_overrides';
 
 export function getCompletedOverrides(): Record<string, string> {
@@ -174,25 +194,61 @@ export function getCompletedOverrides(): Record<string, string> {
   }
 }
 
-export function saveCompletedOverride(rowIndex: number, soHoSo: string, timestampStr: string) {
+export function saveCompletedOverride(
+  rowIndexOrRec: number | { rowIndex: number; soHoSo?: string; tenDonVi?: string; quyTrinh?: string; ngayNhan?: string },
+  soHoSoOrTimestamp?: string,
+  timestampStr?: string
+) {
   try {
     const overrides = getCompletedOverrides();
-    overrides[String(rowIndex)] = timestampStr;
-    if (soHoSo && soHoSo.trim()) {
-      overrides[`shs_${soHoSo.trim()}`] = timestampStr;
+    let key = '';
+    let ts = '';
+    let shs = '';
+
+    if (typeof rowIndexOrRec === 'object') {
+      key = getRecordKey(rowIndexOrRec);
+      ts = soHoSoOrTimestamp || '';
+      shs = rowIndexOrRec.soHoSo || '';
+    } else {
+      shs = soHoSoOrTimestamp || '';
+      ts = timestampStr || '';
+      key = shs.trim() ? `shs_${shs.trim()}` : `row_${rowIndexOrRec}`;
     }
-    localStorage.setItem(COMPLETED_STORAGE_KEY, JSON.stringify(overrides));
+
+    if (key && ts) {
+      overrides[key] = ts;
+      if (shs && shs.trim()) {
+        overrides[`shs_${shs.trim()}`] = ts;
+      }
+      localStorage.setItem(COMPLETED_STORAGE_KEY, JSON.stringify(overrides));
+    }
   } catch (e) {
     console.warn('saveCompletedOverride error:', e);
   }
 }
 
-export function removeCompletedOverride(rowIndex: number, soHoSo: string) {
+export function removeCompletedOverride(
+  rowIndexOrRec: number | { rowIndex: number; soHoSo?: string; tenDonVi?: string; quyTrinh?: string; ngayNhan?: string },
+  soHoSo?: string
+) {
   try {
     const overrides = getCompletedOverrides();
-    delete overrides[String(rowIndex)];
-    if (soHoSo && soHoSo.trim()) {
-      delete overrides[`shs_${soHoSo.trim()}`];
+    let key = '';
+    let shs = '';
+
+    if (typeof rowIndexOrRec === 'object') {
+      key = getRecordKey(rowIndexOrRec);
+      shs = rowIndexOrRec.soHoSo || '';
+      delete overrides[String(rowIndexOrRec.rowIndex)];
+    } else {
+      shs = soHoSo || '';
+      key = shs.trim() ? `shs_${shs.trim()}` : `row_${rowIndexOrRec}`;
+      delete overrides[String(rowIndexOrRec)];
+    }
+
+    delete overrides[key];
+    if (shs && shs.trim()) {
+      delete overrides[`shs_${shs.trim()}`];
     }
     localStorage.setItem(COMPLETED_STORAGE_KEY, JSON.stringify(overrides));
   } catch (e) {
@@ -200,14 +256,49 @@ export function removeCompletedOverride(rowIndex: number, soHoSo: string) {
   }
 }
 
+export function clearAllCompletedOverrides() {
+  try {
+    localStorage.removeItem(COMPLETED_STORAGE_KEY);
+  } catch (e) {
+    console.warn('clearAllCompletedOverrides error:', e);
+  }
+}
+
+export function pruneCompletedOverrides(activeRecords: SheetRecord[]) {
+  try {
+    const overrides = getCompletedOverrides();
+    const activeKeys = new Set<string>();
+    activeRecords.forEach((r) => {
+      activeKeys.add(getRecordKey(r));
+      if (r.soHoSo && r.soHoSo.trim()) {
+        activeKeys.add(`shs_${r.soHoSo.trim()}`);
+      }
+    });
+
+    let changed = false;
+    for (const k of Object.keys(overrides)) {
+      if (!activeKeys.has(k)) {
+        delete overrides[k];
+        changed = true;
+      }
+    }
+    if (changed) {
+      localStorage.setItem(COMPLETED_STORAGE_KEY, JSON.stringify(overrides));
+    }
+  } catch (e) {
+    console.warn('pruneCompletedOverrides error:', e);
+  }
+}
+
 export function saveCompletedOverridesBatch(
-  records: { rowIndex: number; soHoSo: string }[],
+  records: { rowIndex: number; soHoSo?: string; tenDonVi?: string; quyTrinh?: string; ngayNhan?: string }[],
   timestampStr: string
 ) {
   try {
     const overrides = getCompletedOverrides();
     records.forEach((r) => {
-      overrides[String(r.rowIndex)] = timestampStr;
+      const key = getRecordKey(r);
+      overrides[key] = timestampStr;
       if (r.soHoSo && r.soHoSo.trim()) {
         overrides[`shs_${r.soHoSo.trim()}`] = timestampStr;
       }
@@ -216,6 +307,50 @@ export function saveCompletedOverridesBatch(
   } catch (e) {
     console.warn('saveCompletedOverridesBatch error:', e);
   }
+}
+
+// Robust CSV parser
+export function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let currentRow: string[] = [];
+  let currentVal = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    const nextChar = text[i + 1];
+
+    if (char === '"') {
+      if (inQuotes && nextChar === '"') {
+        currentVal += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (char === ',' && !inQuotes) {
+      currentRow.push(currentVal.trim());
+      currentVal = '';
+    } else if ((char === '\r' || char === '\n') && !inQuotes) {
+      if (char === '\r' && nextChar === '\n') {
+        i++;
+      }
+      currentRow.push(currentVal.trim());
+      currentVal = '';
+      if (currentRow.some((c) => c !== '')) {
+        rows.push(currentRow);
+      }
+      currentRow = [];
+    } else {
+      currentVal += char;
+    }
+  }
+  if (currentVal || currentRow.length > 0) {
+    currentRow.push(currentVal.trim());
+    if (currentRow.some((c) => c !== '')) {
+      rows.push(currentRow);
+    }
+  }
+  return rows;
 }
 
 // Parse Google Sheet GViz JSON output if user provided a Google Spreadsheet link
@@ -239,13 +374,34 @@ function parseGvizResponse(rawText: string): { records: SheetRecord[]; sheetName
     raw2D.push(rowVals);
   });
 
+  let dataRows = raw2D;
+  if (Object.keys(headerMap).length < 3 && raw2D.length > 0) {
+    for (let i = 0; i < Math.min(raw2D.length, 4); i++) {
+      const keys = raw2D[i].map((c: any) => cleanKey(String(c)));
+      const matches = keys.filter((k: string) =>
+        ['stt', 'sohoso', 'mahoso', 'quytrinh', 'bophan', 'menu', 'hantra', 'ngaynhan', 'tendonvi'].some(t => k.includes(t))
+      ).length;
+      if (matches >= 2) {
+        keys.forEach((k: string, cIdx: number) => {
+          if (k) headerMap[k] = cIdx;
+        });
+        dataRows = raw2D.slice(i + 1);
+        break;
+      }
+    }
+  }
+
+  // Filter out blank rows
+  dataRows = dataRows.filter((r) => r.some((c: any) => c && String(c).trim() !== ''));
+
   const overrides = getCompletedOverrides();
-  const records = raw2D.map((item, idx) => {
+  const records = dataRows.map((item, idx) => {
     const rec = normalizeRecord(item, idx, headerMap);
     if (!rec.traThucTe || rec.traThucTe.trim() === '') {
+      const key = getRecordKey(rec);
       const localTimestamp =
-        overrides[String(rec.rowIndex)] ||
-        (rec.soHoSo ? overrides[`shs_${rec.soHoSo.trim()}`] : undefined);
+        (rec.soHoSo ? overrides[`shs_${rec.soHoSo.trim()}`] : undefined) ||
+        overrides[key];
       if (localTimestamp) {
         rec.traThucTe = localTimestamp;
       }
@@ -253,6 +409,7 @@ function parseGvizResponse(rawText: string): { records: SheetRecord[]; sheetName
     return rec;
   });
 
+  pruneCompletedOverrides(records);
   return { records, sheetName: 'Google Spreadsheet' };
 }
 
@@ -405,21 +562,71 @@ export async function fetchSheetData(
       const idMatch = cleanUrl.match(/docs\.google\.com\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
       if (idMatch && idMatch[1]) {
         const sheetId = idMatch[1];
-        const gvizUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:json`;
+        const gidMatch = cleanUrl.match(/[#&?]gid=([0-9]+)/);
+        const gidParam = gidMatch ? `&gid=${gidMatch[1]}` : '';
+        const nowTs = Date.now();
+        const gvizUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:json${gidParam}&tq=&_t=${nowTs}`;
+        const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv${gidParam}&_t=${nowTs}`;
+
+        // Attempt 1: GViz direct
         try {
-          const res = await fetch(gvizUrl);
+          const res = await fetch(gvizUrl, { cache: 'no-store' });
           if (res.ok) {
             const txt = await res.text();
-            return parseGvizResponse(txt);
+            if (txt.includes('google.visualization.Query.setResponse')) {
+              return parseGvizResponse(txt);
+            }
           }
         } catch {
-          // Try through proxy
-          const proxyUrl = `/api/proxy?url=${encodeURIComponent(gvizUrl)}`;
-          const pRes = await fetch(proxyUrl);
+          // ignore
+        }
+
+        // Attempt 2: GViz via proxy
+        try {
+          const proxyUrl = `/api/proxy?url=${encodeURIComponent(gvizUrl)}&_t=${nowTs}`;
+          const pRes = await fetch(proxyUrl, { cache: 'no-store' });
           if (pRes.ok) {
             const pData = await pRes.json();
-            if (pData.body) return parseGvizResponse(pData.body);
+            if (pData.body && pData.body.includes('google.visualization.Query.setResponse')) {
+              return parseGvizResponse(pData.body);
+            }
           }
+        } catch {
+          // ignore
+        }
+
+        // Attempt 3: CSV export via proxy or direct
+        try {
+          const proxyCsvUrl = `/api/proxy?url=${encodeURIComponent(csvUrl)}&_t=${nowTs}`;
+          const pRes = await fetch(proxyCsvUrl, { cache: 'no-store' });
+          let csvText = '';
+          if (pRes.ok) {
+            const pData = await pRes.json();
+            csvText = pData.body || '';
+          }
+          if (!csvText) {
+            const cRes = await fetch(csvUrl, { cache: 'no-store' });
+            if (cRes.ok) csvText = await cRes.text();
+          }
+
+          if (csvText && !csvText.includes('<!DOCTYPE html>')) {
+            const parsedRows = parseCsv(csvText);
+            if (parsedRows.length > 0) {
+              return parseGvizResponse(
+                JSON.stringify({
+                  status: 'ok',
+                  table: {
+                    cols: parsedRows[0].map((h, i) => ({ id: `col_${i}`, label: h })),
+                    rows: parsedRows.slice(1).map((r) => ({
+                      c: r.map((val) => ({ v: val, f: val })),
+                    })),
+                  },
+                })
+              );
+            }
+          }
+        } catch {
+          // ignore
         }
       }
     }
@@ -433,8 +640,8 @@ export async function fetchSheetData(
 
     // 1. First, call our server-side proxy which completely avoids CORS preflight restrictions
     try {
-      const proxyUrl = `/api/proxy?url=${encodeURIComponent(fetchUrl)}`;
-      const pRes = await fetch(proxyUrl);
+      const proxyUrl = `/api/proxy?url=${encodeURIComponent(fetchUrl)}&_t=${Date.now()}`;
+      const pRes = await fetch(proxyUrl, { cache: 'no-store' });
       if (pRes.ok) {
         const pData = await pRes.json();
         httpStatus = pData.httpStatus || 200;
@@ -450,6 +657,7 @@ export async function fetchSheetData(
         const res = await fetch(fetchUrl, {
           method: 'GET',
           redirect: 'follow',
+          cache: 'no-store',
         });
         httpStatus = res.status;
         responseText = await res.text();
@@ -542,45 +750,67 @@ export async function fetchSheetData(
       }
     }
 
-    // 6. Header mapping for 2D array matrix
+    // 7. Multi-row Header mapping detection for 2D array matrix
     let headerMap: Record<string, number> | undefined;
     let dataRows = rawList;
 
     if (rawList.length > 0 && Array.isArray(rawList[0])) {
-      const firstRowKeys = rawList[0].map((cell: any) => cleanKey(String(cell)));
-      const isHeaderRow = firstRowKeys.some((k: string) =>
-        ['stt', 'sohoso', 'mahoso', 'quytrinh', 'bophan', 'menu', 'hantra', 'ngaynhan', 'tendonvi', 'canbo', 'coquan'].some(
-          (term) => k.includes(term)
-        )
-      );
+      let headerRowIdx = -1;
+      for (let r = 0; r < Math.min(rawList.length, 5); r++) {
+        const row = rawList[r];
+        if (!Array.isArray(row)) continue;
+        const keys = row.map((cell: any) => cleanKey(String(cell)));
+        const matchCount = keys.filter((k: string) =>
+          ['stt', 'sohoso', 'mahoso', 'shs', 'quytrinh', 'thutuc', 'bophan', 'menu', 'hantra', 'ngaynhan', 'tendonvi', 'canbo', 'coquan', 'trathucte'].some(
+            (term) => k.includes(term)
+          )
+        ).length;
 
-      if (isHeaderRow) {
-        headerMap = {};
-        firstRowKeys.forEach((k: string, idx: number) => {
-          if (k) headerMap![k] = idx;
-        });
-        dataRows = rawList.slice(1);
+        if (matchCount >= 2) {
+          headerRowIdx = r;
+          headerMap = {};
+          keys.forEach((k: string, idx: number) => {
+            if (k) headerMap![k] = idx;
+          });
+          break;
+        }
+      }
+
+      if (headerRowIdx >= 0) {
+        dataRows = rawList.slice(headerRowIdx + 1);
       }
     }
+
+    // Filter out completely blank rows
+    dataRows = dataRows.filter((row: any) => {
+      if (!row) return false;
+      if (Array.isArray(row)) {
+        return row.some((cell: any) => cell != null && String(cell).trim() !== '');
+      }
+      return Object.values(row).some((val: any) => val != null && String(val).trim() !== '');
+    });
 
     const overrides = getCompletedOverrides();
 
     const records: SheetRecord[] = dataRows.map((item, idx) => {
       const rec = normalizeRecord(item, idx, headerMap);
-      // Ensure rowIndex is a valid number
       rec.rowIndex = Number(rec.rowIndex) || (idx + 2);
 
-      // If sheet doesn't yet reflect completion, check local overrides
+      // If sheet doesn't yet reflect completion, check local overrides by unique key
       if (!rec.traThucTe || rec.traThucTe.trim() === '') {
+        const key = getRecordKey(rec);
         const localTimestamp =
-          overrides[String(rec.rowIndex)] ||
-          (rec.soHoSo ? overrides[`shs_${rec.soHoSo.trim()}`] : undefined);
+          (rec.soHoSo ? overrides[`shs_${rec.soHoSo.trim()}`] : undefined) ||
+          overrides[key];
         if (localTimestamp) {
           rec.traThucTe = localTimestamp;
         }
       }
       return rec;
     });
+
+    // Prune stale overrides for records no longer in the sheet
+    pruneCompletedOverrides(records);
 
     return { records, sheetName: data.sheetName || 'Sheet dữ liệu' };
   } catch (error: any) {

@@ -6,6 +6,7 @@ import {
   saveCompletedOverride,
   removeCompletedOverride,
   saveCompletedOverridesBatch,
+  clearAllCompletedOverrides,
   getDemoRecords,
 } from './lib/sheets';
 import { RecordTable } from './components/RecordTable';
@@ -24,6 +25,11 @@ import {
   Check,
   X,
   BookOpen,
+  Play,
+  Pause,
+  Activity,
+  RotateCcw,
+  Trash2,
 } from 'lucide-react';
 import { cn } from './lib/utils';
 import { parseDate, calculateTimeRemaining } from './lib/dateUtils';
@@ -35,9 +41,22 @@ export default function App() {
   const [sheetName, setSheetName] = useState('');
   const [records, setRecords] = useState<SheetRecord[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isAutoRefreshing, setIsAutoRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showGuideModal, setShowGuideModal] = useState(false);
   const [hasCopiedCode, setHasCopiedCode] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+
+  // Auto-refresh continuous loading settings
+  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState<boolean>(() => {
+    const saved = localStorage.getItem('deadline_auto_refresh');
+    return saved !== null ? saved === 'true' : true; // Default ON for continuous auto-load
+  });
+  const [refreshInterval, setRefreshInterval] = useState<number>(() => {
+    const saved = localStorage.getItem('deadline_refresh_interval');
+    return saved ? Number(saved) : 15; // Default 15 seconds
+  });
+  const [countdown, setCountdown] = useState<number>(15);
 
   // Full landscape mode enabled by default for maximum widescreen viewing
   const [isFullLandscape, setIsFullLandscape] = useState<boolean>(() => {
@@ -53,44 +72,101 @@ export default function App() {
     });
   };
 
+  const loadData = async (url: string = webAppUrl, silent: boolean = false) => {
+    if (!url || !url.trim()) {
+      if (!silent) setError('Vui lòng nhập Web App URL của Apps Script hoặc liên kết Google Sheets');
+      return;
+    }
+
+    if (silent) {
+      setIsAutoRefreshing(true);
+    } else {
+      setIsLoading(true);
+      setError(null);
+    }
+
+    try {
+      const { records: data, sheetName: sName, error: err } = await fetchSheetData(url);
+      if (err) {
+        if (!silent || records.length === 0) {
+          setError(err);
+        }
+      } else {
+        localStorage.setItem('deadline_webapp_url', url);
+        // Replace previous records completely with latest fresh data from Google Sheet!
+        setRecords(data);
+        setSheetName(sName);
+        setLastUpdated(new Date());
+        setError(null);
+      }
+    } catch (err: any) {
+      if (!silent || records.length === 0) {
+        setError(err.message || 'Lỗi tải dữ liệu');
+      }
+    } finally {
+      if (silent) {
+        setIsAutoRefreshing(false);
+      } else {
+        setIsLoading(false);
+      }
+    }
+  };
+
+  // Initial load
   useEffect(() => {
     if (webAppUrl) {
       loadData(webAppUrl);
     }
   }, []);
 
-  const loadData = async (url: string = webAppUrl) => {
-    if (!url || !url.trim()) {
-      setError('Vui lòng nhập Web App URL của Apps Script hoặc liên kết Google Sheets');
-      return;
-    }
+  // Continuous auto-load timer effect
+  useEffect(() => {
+    if (!autoRefreshEnabled || !webAppUrl) return;
 
-    setIsLoading(true);
-    setError(null);
-    try {
-      const { records: data, sheetName: sName, error: err } = await fetchSheetData(url);
-      if (err) {
-        setError(err);
-      } else {
-        localStorage.setItem('deadline_webapp_url', url);
-        setRecords(data);
-        setSheetName(sName);
-      }
-    } catch (err: any) {
-      setError(err.message || 'Lỗi tải dữ liệu');
-    } finally {
-      setIsLoading(false);
-    }
-  };
+    setCountdown(refreshInterval);
+    const timer = setInterval(() => {
+      setCountdown((prev) => {
+        if (prev <= 1) {
+          loadData(webAppUrl, true); // true = silent background refresh
+          return refreshInterval;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [autoRefreshEnabled, webAppUrl, refreshInterval]);
 
   const handleRefresh = () => {
-    loadData();
+    setCountdown(refreshInterval);
+    loadData(webAppUrl);
+  };
+
+  const toggleAutoRefresh = () => {
+    setAutoRefreshEnabled((prev) => {
+      const next = !prev;
+      localStorage.setItem('deadline_auto_refresh', String(next));
+      if (next) setCountdown(refreshInterval);
+      return next;
+    });
+  };
+
+  const handleIntervalChange = (newInterval: number) => {
+    setRefreshInterval(newInterval);
+    localStorage.setItem('deadline_refresh_interval', String(newInterval));
+    setCountdown(newInterval);
+  };
+
+  const handleClearCompletedCache = () => {
+    clearAllCompletedOverrides();
+    loadData(webAppUrl);
   };
 
   const handleLoadDemoData = () => {
     const demo = getDemoRecords();
     setRecords(demo);
     setSheetName('Dữ liệu mô phỏng Một cửa điện tử');
+    setLastUpdated(new Date());
     setError(null);
   };
 
@@ -264,6 +340,22 @@ function doPost(e) {
           </div>
 
           <div className="flex items-center gap-2">
+            {autoRefreshEnabled && (
+              <div
+                className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs shadow-2xs"
+                title={`Tự động nạp dữ liệu liên tục sau mỗi ${refreshInterval}s`}
+              >
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                </span>
+                <span className="text-[11px] font-semibold text-emerald-900">Auto-load:</span>
+                <strong className="font-mono text-emerald-700">
+                  {isAutoRefreshing ? 'Đang nạp...' : `${countdown}s`}
+                </strong>
+              </div>
+            )}
+
             <button
               onClick={toggleLandscape}
               className={cn(
@@ -304,48 +396,128 @@ function doPost(e) {
         )}
       >
         {/* Configuration Bar */}
-        <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm flex flex-col md:flex-row gap-4 items-stretch md:items-center justify-between">
-          <div className="flex-1">
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="text-xs font-semibold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
-                <span>Cấu hình Web App URL</span>
-                <span className="text-[10px] font-normal normal-case text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100">
-                  Tự động lưu bộ nhớ trình duyệt
-                </span>
-              </label>
+        <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm flex flex-col gap-3">
+          <div className="flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between">
+            <div className="flex-1">
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs font-semibold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                  <span>Cấu hình Web App URL / Google Sheet</span>
+                  <span className="text-[10px] font-normal normal-case text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100">
+                    Tự động lưu bộ nhớ trình duyệt
+                  </span>
+                </label>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <input
+                  type="text"
+                  value={webAppUrl}
+                  onChange={(e) => setWebAppUrl(e.target.value)}
+                  placeholder="Nhập Web App URL (kết thúc bằng /exec) hoặc liên kết Google Sheets..."
+                  className="flex-1 min-w-[280px] rounded-lg border border-slate-300 px-3 py-2 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all font-mono"
+                />
+                <button
+                  onClick={() => loadData(webAppUrl)}
+                  disabled={isLoading || !webAppUrl}
+                  className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors shadow-sm disabled:opacity-50 whitespace-nowrap cursor-pointer"
+                >
+                  <RefreshCw className={cn('w-4 h-4', (isLoading || isAutoRefreshing) && 'animate-spin')} />
+                  <span>{isLoading ? 'Đang tải...' : 'Tải lại dữ liệu'}</span>
+                </button>
+                <button
+                  onClick={handleLoadDemoData}
+                  className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors shadow-2xs whitespace-nowrap cursor-pointer"
+                  title="Tải 8 hồ sơ mẫu để thử nghiệm tính năng ngay mà không cần đợi kết nối"
+                >
+                  <Sparkles className="w-4 h-4 text-emerald-600" />
+                  <span>Dùng dữ liệu mẫu</span>
+                </button>
+                <button
+                  onClick={() => setShowGuideModal(true)}
+                  className="flex items-center gap-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 px-3 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors shadow-2xs whitespace-nowrap cursor-pointer"
+                  title="Xem hướng dẫn cách lấy Web App URL chính xác từ Google Sheets"
+                >
+                  <HelpCircle className="w-4 h-4 text-blue-600" />
+                  <span className="hidden sm:inline">Hướng dẫn Apps Script</span>
+                  <span className="sm:hidden">Hướng dẫn</span>
+                </button>
+              </div>
             </div>
-            <div className="flex flex-wrap gap-2">
-              <input
-                type="text"
-                value={webAppUrl}
-                onChange={(e) => setWebAppUrl(e.target.value)}
-                placeholder="Nhập Web App URL (kết thúc bằng /exec) hoặc liên kết Google Sheets..."
-                className="flex-1 min-w-[280px] rounded-lg border border-slate-300 px-3 py-2 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all font-mono"
-              />
+          </div>
+
+          {/* Continuous Auto-Load & Synchronization Bar */}
+          <div className="pt-2.5 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2.5 text-xs">
+            <div className="flex flex-wrap items-center gap-2">
               <button
-                onClick={() => loadData(webAppUrl)}
-                disabled={isLoading || !webAppUrl}
-                className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors shadow-sm disabled:opacity-50 whitespace-nowrap cursor-pointer"
+                onClick={toggleAutoRefresh}
+                className={cn(
+                  'flex items-center gap-1.5 px-2.5 py-1 rounded-md font-semibold border transition-all cursor-pointer shadow-2xs',
+                  autoRefreshEnabled
+                    ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100'
+                    : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                )}
+                title={autoRefreshEnabled ? 'Bấm để tạm dừng tự động tải liên tục' : 'Bấm để bật tự động tải liên tục từ Google Sheets'}
               >
-                <RefreshCw className={cn('w-4 h-4', isLoading && 'animate-spin')} />
-                <span>{isLoading ? 'Đang tải...' : 'Tải lại dữ liệu'}</span>
+                {autoRefreshEnabled ? (
+                  <>
+                    <span className="relative flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                    </span>
+                    <span>Tự động tải liên tục: <strong>ĐANG BẬT</strong></span>
+                  </>
+                ) : (
+                  <>
+                    <Pause className="w-3.5 h-3.5 text-slate-400" />
+                    <span>Tự động tải liên tục: <strong>TẠM DỪNG</strong></span>
+                  </>
+                )}
               </button>
+
+              {autoRefreshEnabled && (
+                <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 px-2 py-1 rounded-md text-slate-700">
+                  {isAutoRefreshing ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-emerald-600" />
+                      <span className="text-emerald-700 font-medium">Đang nạp dữ liệu mới...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Clock className="w-3.5 h-3.5 text-slate-500" />
+                      <span>Làm mới sau: <strong className="font-mono text-emerald-700">{countdown}s</strong></span>
+                    </>
+                  )}
+                </div>
+              )}
+
+              <div className="flex items-center gap-1 text-slate-600 bg-white px-2 py-0.5 rounded border border-slate-200">
+                <span className="text-[11px] text-slate-500">Chu kỳ:</span>
+                <select
+                  value={refreshInterval}
+                  onChange={(e) => handleIntervalChange(Number(e.target.value))}
+                  className="bg-transparent border-none text-xs font-semibold text-slate-800 focus:outline-none cursor-pointer"
+                >
+                  <option value={10}>10 giây (Siêu tốc)</option>
+                  <option value={15}>15 giây (Chuẩn)</option>
+                  <option value={30}>30 giây</option>
+                  <option value={60}>1 phút</option>
+                </select>
+              </div>
+
+              {lastUpdated && (
+                <span className="text-[11px] text-slate-500 hidden md:inline">
+                  • Cập nhật: <strong className="text-slate-700 font-mono">{lastUpdated.toLocaleTimeString('vi-VN')}</strong> ({records.length} hồ sơ)
+                </span>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2">
               <button
-                onClick={handleLoadDemoData}
-                className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors shadow-2xs whitespace-nowrap cursor-pointer"
-                title="Tải 8 hồ sơ mẫu để thử nghiệm tính năng ngay mà không cần đợi kết nối"
+                onClick={handleClearCompletedCache}
+                className="flex items-center gap-1 text-[11px] text-slate-500 hover:text-red-700 px-2 py-1 rounded hover:bg-red-50 border border-transparent hover:border-red-200 transition-colors cursor-pointer"
+                title="Xóa bộ nhớ đệm hoàn thành cục bộ và nạp lại chuẩn 100% theo trạng thái trên Google Sheet (dùng khi bạn vừa thay thế toàn bộ dữ liệu mới trên Sheet)"
               >
-                <Sparkles className="w-4 h-4 text-emerald-600" />
-                <span>Dùng dữ liệu mẫu</span>
-              </button>
-              <button
-                onClick={() => setShowGuideModal(true)}
-                className="flex items-center gap-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 px-3 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors shadow-2xs whitespace-nowrap cursor-pointer"
-                title="Xem hướng dẫn cách lấy Web App URL chính xác từ Google Sheets"
-              >
-                <HelpCircle className="w-4 h-4 text-blue-600" />
-                <span className="hidden sm:inline">Hướng dẫn Apps Script</span>
-                <span className="sm:hidden">Hướng dẫn</span>
+                <RotateCcw className="w-3 h-3" />
+                <span>Đồng bộ sạch từ Sheet</span>
               </button>
             </div>
           </div>
