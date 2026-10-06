@@ -566,11 +566,9 @@ export async function fetchSheetData(
         const gidParam = gidMatch ? `&gid=${gidMatch[1]}` : '';
         const nowTs = Date.now();
         const gvizUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:json${gidParam}&tq=&_t=${nowTs}`;
-        const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv${gidParam}&_t=${nowTs}`;
 
-        // Attempt 1: GViz direct
         try {
-          const res = await fetch(gvizUrl, { cache: 'no-store' });
+          const res = await fetch(gvizUrl);
           if (res.ok) {
             const txt = await res.text();
             if (txt.includes('google.visualization.Query.setResponse')) {
@@ -580,90 +578,28 @@ export async function fetchSheetData(
         } catch {
           // ignore
         }
-
-        // Attempt 2: GViz via proxy
-        try {
-          const proxyUrl = `/api/proxy?url=${encodeURIComponent(gvizUrl)}&_t=${nowTs}`;
-          const pRes = await fetch(proxyUrl, { cache: 'no-store' });
-          if (pRes.ok) {
-            const pData = await pRes.json();
-            if (pData.body && pData.body.includes('google.visualization.Query.setResponse')) {
-              return parseGvizResponse(pData.body);
-            }
-          }
-        } catch {
-          // ignore
-        }
-
-        // Attempt 3: CSV export via proxy or direct
-        try {
-          const proxyCsvUrl = `/api/proxy?url=${encodeURIComponent(csvUrl)}&_t=${nowTs}`;
-          const pRes = await fetch(proxyCsvUrl, { cache: 'no-store' });
-          let csvText = '';
-          if (pRes.ok) {
-            const pData = await pRes.json();
-            csvText = pData.body || '';
-          }
-          if (!csvText) {
-            const cRes = await fetch(csvUrl, { cache: 'no-store' });
-            if (cRes.ok) csvText = await cRes.text();
-          }
-
-          if (csvText && !csvText.includes('<!DOCTYPE html>')) {
-            const parsedRows = parseCsv(csvText);
-            if (parsedRows.length > 0) {
-              return parseGvizResponse(
-                JSON.stringify({
-                  status: 'ok',
-                  table: {
-                    cols: parsedRows[0].map((h, i) => ({ id: `col_${i}`, label: h })),
-                    rows: parsedRows.slice(1).map((r) => ({
-                      c: r.map((val) => ({ v: val, f: val })),
-                    })),
-                  },
-                })
-              );
-            }
-          }
-        } catch {
-          // ignore
-        }
       }
     }
 
-    // Case 2: Standard Google Apps Script Web App URL
+    // Case 2: Standard Google Apps Script Web App URL (Direct browser fetch, fast & reliable)
     const separator = cleanUrl.includes('?') ? '&' : '?';
     const fetchUrl = `${cleanUrl}${separator}_t=${Date.now()}`;
 
     let responseText: string | null = null;
     let httpStatus: number = 200;
 
-    // 1. First, call our server-side proxy which completely avoids CORS preflight restrictions
     try {
-      const proxyUrl = `/api/proxy?url=${encodeURIComponent(fetchUrl)}&_t=${Date.now()}`;
-      const pRes = await fetch(proxyUrl, { cache: 'no-store' });
-      if (pRes.ok) {
-        const pData = await pRes.json();
-        httpStatus = pData.httpStatus || 200;
-        responseText = pData.body || '';
-      }
-    } catch {
-      // ignore
-    }
-
-    // 2. If proxy was not reachable, try direct browser fetch
-    if (!responseText) {
-      try {
-        const res = await fetch(fetchUrl, {
-          method: 'GET',
-          redirect: 'follow',
-          cache: 'no-store',
-        });
-        httpStatus = res.status;
-        responseText = await res.text();
-      } catch (err: any) {
-        // Fetch failed directly
-      }
+      const res = await fetch(fetchUrl, {
+        method: 'GET',
+        redirect: 'follow',
+      });
+      httpStatus = res.status;
+      responseText = await res.text();
+    } catch (err: any) {
+      console.warn('Direct fetch error:', err);
+      throw new Error(
+        'Không thể kết nối trực tiếp đến Web App URL. Vui lòng kiểm tra lại kết nối mạng hoặc thử lại.'
+      );
     }
 
     if (!responseText) {

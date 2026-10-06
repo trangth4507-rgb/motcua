@@ -172,39 +172,82 @@ export default function App() {
 
   const copyAppsScriptCode = () => {
     const code = `function doGet(e) {
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
-  var data = sheet.getDataRange().getValues();
-  return ContentService.createTextOutput(JSON.stringify({
-    status: "success",
-    data: data,
-    sheetName: sheet.getName()
-  })).setMimeType(ContentService.MimeType.JSON);
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getActiveSheet();
+    var data = sheet.getDataRange().getValues();
+    
+    if (data.length <= 1) {
+      return ContentService.createTextOutput(JSON.stringify({ status: 'success', data: [] }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    // Tự động đọc tất cả các tiêu đề cột ở Hàng 1 (bao gồm cả BỘ PHẬN HIỆN TẠI và MENU HIỆN TẠI)
+    var headers = data[0].map(function(h) { return String(h).trim(); });
+    var records = [];
+    
+    for (var i = 1; i < data.length; i++) {
+      var row = data[i];
+      if (!row.some(function(cell) { return cell !== '' && cell !== null; })) continue;
+      
+      var record = { rowIndex: i + 1 };
+      for (var j = 0; j < headers.length; j++) {
+        var header = headers[j];
+        if (!header) continue;
+        var val = row[j];
+        if (val instanceof Date) {
+          record[header] = Utilities.formatDate(val, Session.getScriptTimeZone(), "dd/MM/yyyy HH:mm");
+        } else {
+          record[header] = val != null ? String(val) : '';
+        }
+      }
+      records.push(record);
+    }
+    
+    return ContentService.createTextOutput(JSON.stringify({ 
+      status: 'success', 
+      sheetName: sheet.getName(),
+      data: records 
+    })).setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ status: 'error', message: err.toString() }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
 }
 
 function doPost(e) {
   try {
-    var params = JSON.parse(e.postData.contents);
-    var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
-    var action = params.action;
+    var contents = JSON.parse(e.postData.contents);
+    var rowIndex = contents.rowIndex;
+    var timestamp = contents.timestamp;
     
-    if (action === "markComplete") {
-      var rowIndex = params.rowIndex;
-      var timestamp = params.timestamp || new Date().toLocaleString("vi-VN");
-      // Cột K (cột 11) là cột Trả thực tế
-      sheet.getRange(rowIndex, 11).setValue(timestamp);
-      return ContentService.createTextOutput(JSON.stringify({ status: "success" })).setMimeType(ContentService.MimeType.JSON);
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getActiveSheet();
+    var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+    
+    function clean(str) {
+      return String(str || '').toLowerCase().replace(/[^a-z0-9]/g, '');
     }
     
-    if (action === "markMultipleComplete") {
-      var rowIndices = params.rowIndices || [];
-      var timestamp = params.timestamp || new Date().toLocaleString("vi-VN");
-      for (var i = 0; i < rowIndices.length; i++) {
-        sheet.getRange(rowIndices[i], 11).setValue(timestamp);
+    var colIndex = -1;
+    for (var c = 0; c < headers.length; c++) {
+      var h = clean(headers[c]);
+      if (h.indexOf('trathucte') !== -1 || h.indexOf('thucte') !== -1) {
+        colIndex = c + 1;
+        break;
       }
-      return ContentService.createTextOutput(JSON.stringify({ status: "success", count: rowIndices.length })).setMimeType(ContentService.MimeType.JSON);
     }
+    if (colIndex === -1) {
+      colIndex = headers.length;
+    }
+    
+    sheet.getRange(rowIndex, colIndex).setValue(timestamp);
+    
+    return ContentService.createTextOutput(JSON.stringify({ status: 'success' }))
+      .setMimeType(ContentService.MimeType.JSON);
   } catch (err) {
-    return ContentService.createTextOutput(JSON.stringify({ status: "error", message: err.toString() })).setMimeType(ContentService.MimeType.JSON);
+    return ContentService.createTextOutput(JSON.stringify({ status: 'error', message: err.toString() }))
+      .setMimeType(ContentService.MimeType.JSON);
   }
 }`;
     navigator.clipboard.writeText(code);
