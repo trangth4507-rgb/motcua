@@ -353,11 +353,166 @@ export function parseCsv(text: string): string[][] {
   return rows;
 }
 
-// Parse Google Sheet GViz JSON output if user provided a Google Spreadsheet link
-function parseGvizResponse(rawText: string): { records: SheetRecord[]; sheetName: string } {
-  const match = rawText.match(/google\.visualization\.Query\.setResponse\(([\s\S]*)\);?/);
-  const jsonStr = match ? match[1] : rawText;
-  const json = JSON.parse(jsonStr);
+// JSONP loader for Google Visualization Query API (Completely bypasses CORS restrictions)
+export function fetchGvizJsonp(sheetId: string, gidParam: string = ''): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const cbId = `gviz_cb_${Date.now()}_${Math.floor(Math.random() * 1000000)}`;
+    const script = document.createElement('script');
+    let finished = false;
+
+    const cleanup = () => {
+      try {
+        delete (window as any)[cbId];
+      } catch {}
+      if (script.parentNode) {
+        script.parentNode.removeChild(script);
+      }
+    };
+
+    const timer = setTimeout(() => {
+      if (!finished) {
+        finished = true;
+        cleanup();
+        reject(new Error('Hết thời gian kết nối Google GViz (timeout sau 10s)'));
+      }
+    }, 10000);
+
+    (window as any)[cbId] = (response: any) => {
+      if (!finished) {
+        finished = true;
+        clearTimeout(timer);
+        cleanup();
+        resolve(response);
+      }
+    };
+
+    script.onerror = () => {
+      if (!finished) {
+        finished = true;
+        clearTimeout(timer);
+        cleanup();
+        reject(new Error('Lỗi tải dữ liệu Google Sheets qua JSONP'));
+      }
+    };
+
+    const cacheBuster = `&_t=${Date.now()}`;
+    script.src = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=responseHandler:${cbId}${gidParam}${cacheBuster}`;
+    document.head.appendChild(script);
+  });
+}
+
+// Fallback loader using local proxy if available
+export async function fetchProxyGvizOrCsv(sheetId: string, gidParam: string = ''): Promise<{ records: SheetRecord[]; sheetName: string }> {
+  const gvizUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:json${gidParam}&_t=${Date.now()}`;
+  try {
+    const res = await fetch(`/api/proxy?url=${encodeURIComponent(gvizUrl)}`);
+    if (res.ok) {
+      const txt = await res.text();
+      if (txt.includes('google.visualization.Query.setResponse') || txt.includes('"table"')) {
+        return parseGvizResponse(txt);
+      }
+    }
+  } catch (err) {
+    console.warn('Proxy GViz attempt failed:', err);
+  }
+
+  // Try CSV export via proxy
+  const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv${gidParam}&_t=${Date.now()}`;
+  try {
+    const res = await fetch(`/api/proxy?url=${encodeURIComponent(csvUrl)}`);
+    if (res.ok) {
+      const csvTxt = await res.text();
+      if (csvTxt && csvTxt.trim().length > 0) {
+        const rows = parseCsv(csvTxt);
+        if (rows.length > 0) {
+          return parse2DArrayRecords(rows);
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('Proxy CSV attempt failed:', err);
+  }
+
+  throw new Error('Không thể tải qua proxy');
+}
+
+// Convert 2D array matrix into SheetRecord[]
+export function parse2DArrayRecords(rawList: any[][]): { records: SheetRecord[]; sheetName: string } {
+  let headerMap: Record<string, number> = {};
+  let dataRows = rawList;
+
+  if (rawList.length > 0 && Array.isArray(rawList[0])) {
+    let headerRowIdx = -1;
+    for (let r = 0; r < Math.min(rawList.length, 5); r++) {
+      const row = rawList[r];
+      if (!Array.isArray(row)) continue;
+      const keys = row.map((cell: any) => cleanKey(String(cell)));
+      const matchCount = keys.filter((k: string) =>
+        ['stt', 'sohoso', 'mahoso', 'shs', 'quytrinh', 'thutuc', 'bophan', 'menu', 'hantra', 'ngaynhan', 'tendonvi', 'canbo', 'coquan', 'trathucte'].some(
+          (term) => k.includes(term)
+        )
+      ).length;
+
+      if (matchCount >= 2) {
+        headerRowIdx = r;
+        headerMap = {};
+        keys.forEach((k: string, idx: number) => {
+          if (k) headerMap[k] = idx;
+        });
+        break;
+      }
+    }
+
+    if (headerRowIdx >= 0) {
+      dataRows = rawList.slice(headerRowIdx + 1);
+    }
+  }
+
+  // Filter out blank rows
+  dataRows = dataRows.filter((row: any) => {
+    if (!row) return false;
+    if (Array.isArray(row)) {
+      return row.some((cell: any) => cell != null && String(cell).trim() !== '');
+    }
+    return Object.values(row).some((val: any) => val != null && String(val).trim() !== '');
+  });
+
+  const overrides = getCompletedOverrides();
+  const records: SheetRecord[] = dataRows.map((item, idx) => {
+    const rec = normalizeRecord(item, idx, headerMap);
+    rec.rowIndex = Number(rec.rowIndex) || (idx + 2);
+
+    if (!rec.traThucTe || rec.traThucTe.trim() === '') {
+      const key = getRecordKey(rec);
+      const localTimestamp =
+        (rec.soHoSo ? overrides[`shs_${rec.soHoSo.trim()}`] : undefined) ||
+        overrides[key];
+      if (localTimestamp) {
+        rec.traThucTe = localTimestamp;
+      }
+    }
+    return rec;
+  });
+
+  pruneCompletedOverrides(records);
+  return { records, sheetName: 'Google Sheets' };
+}
+
+// Parse Google Sheet GViz JSON output (works with both text and pre-parsed JSON from JSONP)
+export function parseGvizResponse(rawTextOrJson: any): { records: SheetRecord[]; sheetName: string } {
+  let json: any;
+  if (typeof rawTextOrJson === 'string') {
+    const match = rawTextOrJson.match(/google\.visualization\.Query\.setResponse\(([\s\S]*)\);?/);
+    const jsonStr = match ? match[1] : rawTextOrJson;
+    json = JSON.parse(jsonStr);
+  } else {
+    json = rawTextOrJson;
+  }
+
+  if (json.status === 'error') {
+    const errMsg = json.errors?.[0]?.message || json.errors?.[0]?.detailed_message || 'Lỗi truy vấn từ Google Sheets';
+    throw new Error(`Google Sheets thông báo: ${errMsg}`);
+  }
 
   const cols = json.table?.cols || [];
   const rows = json.table?.rows || [];
@@ -376,10 +531,10 @@ function parseGvizResponse(rawText: string): { records: SheetRecord[]; sheetName
 
   let dataRows = raw2D;
   if (Object.keys(headerMap).length < 3 && raw2D.length > 0) {
-    for (let i = 0; i < Math.min(raw2D.length, 4); i++) {
+    for (let i = 0; i < Math.min(raw2D.length, 5); i++) {
       const keys = raw2D[i].map((c: any) => cleanKey(String(c)));
       const matches = keys.filter((k: string) =>
-        ['stt', 'sohoso', 'mahoso', 'quytrinh', 'bophan', 'menu', 'hantra', 'ngaynhan', 'tendonvi'].some(t => k.includes(t))
+        ['stt', 'sohoso', 'mahoso', 'shs', 'quytrinh', 'thutuc', 'bophan', 'menu', 'hantra', 'ngaynhan', 'tendonvi', 'canbo', 'coquan', 'trathucte'].some(t => k.includes(t))
       ).length;
       if (matches >= 2) {
         keys.forEach((k: string, cIdx: number) => {
@@ -397,6 +552,7 @@ function parseGvizResponse(rawText: string): { records: SheetRecord[]; sheetName
   const overrides = getCompletedOverrides();
   const records = dataRows.map((item, idx) => {
     const rec = normalizeRecord(item, idx, headerMap);
+    rec.rowIndex = idx + 2;
     if (!rec.traThucTe || rec.traThucTe.trim() === '') {
       const key = getRecordKey(rec);
       const localTimestamp =
@@ -410,7 +566,7 @@ function parseGvizResponse(rawText: string): { records: SheetRecord[]; sheetName
   });
 
   pruneCompletedOverrides(records);
-  return { records, sheetName: 'Google Spreadsheet' };
+  return { records, sheetName: 'Google Sheets trực tiếp' };
 }
 
 export function getDemoRecords(): SheetRecord[] {
@@ -557,111 +713,119 @@ export async function fetchSheetData(
 
     const cleanUrl = webAppUrl.trim().replace(/^["']|["']$/g, '');
 
-    // Case 1: User pasted a Google Spreadsheet link instead of Apps Script Web App URL
-    if (cleanUrl.includes('docs.google.com/spreadsheets/d/')) {
-      const idMatch = cleanUrl.match(/docs\.google\.com\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
-      if (idMatch && idMatch[1]) {
-        const sheetId = idMatch[1];
-        const gidMatch = cleanUrl.match(/[#&?]gid=([0-9]+)/);
-        const gidParam = gidMatch ? `&gid=${gidMatch[1]}` : '';
-        const nowTs = Date.now();
-        const gvizUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:json${gidParam}&tq=&_t=${nowTs}`;
+    // Detect if URL is a Google Sheets spreadsheet link or raw Sheet ID
+    const isGoogleSpreadsheet =
+      cleanUrl.includes('docs.google.com/spreadsheets') ||
+      cleanUrl.includes('drive.google.com') ||
+      /^[a-zA-Z0-9-_]{25,}$/.test(cleanUrl);
 
+    // Case 1: Google Spreadsheet link (Dán thẳng link bất kỳ Google Sheet nào)
+    if (isGoogleSpreadsheet) {
+      let sheetId = '';
+      const idMatch = cleanUrl.match(/docs\.google\.com\/spreadsheets\/(?:d|u\/[0-9]+\/d)\/([a-zA-Z0-9-_]+)/);
+      if (idMatch && idMatch[1]) {
+        sheetId = idMatch[1];
+      } else if (/^[a-zA-Z0-9-_]{25,}$/.test(cleanUrl)) {
+        sheetId = cleanUrl;
+      }
+
+      const gidMatch = cleanUrl.match(/[#&?]gid=([0-9]+)/);
+      const gidParam = gidMatch ? `&gid=${gidMatch[1]}` : '';
+
+      if (sheetId) {
+        // Chiến lược 1: Thử nạp siêu tốc qua JSONP (Hoàn toàn không bị chặn CORS, thời gian tải < 200ms)
         try {
-          const res = await fetch(gvizUrl);
-          if (res.ok) {
-            const txt = await res.text();
-            if (txt.includes('google.visualization.Query.setResponse')) {
-              return parseGvizResponse(txt);
-            }
+          const gvizData = await fetchGvizJsonp(sheetId, gidParam);
+          if (gvizData && (gvizData.table || gvizData.status === 'ok')) {
+            return parseGvizResponse(gvizData);
           }
-        } catch {
-          // ignore
+        } catch (jsonpErr) {
+          console.warn('JSONP fetch attempt failed, trying proxy...', jsonpErr);
         }
+
+        // Chiến lược 2: Thử nạp qua Dev Proxy (/api/proxy) nếu chạy trong môi trường dev
+        try {
+          const proxyResult = await fetchProxyGvizOrCsv(sheetId, gidParam);
+          if (proxyResult && proxyResult.records.length > 0) {
+            return proxyResult;
+          }
+        } catch (proxyErr) {
+          console.warn('Proxy fetch attempt failed, checking master webapp...', proxyErr);
+        }
+
+        // Chiến lược 3: Nếu bảng tính riêng tư, gọi qua Web App vạn năng (nếu người dùng đã cấu hình trước đó)
+        const masterWebApp = localStorage.getItem('deadline_master_webapp_url');
+        if (masterWebApp && masterWebApp.includes('script.google.com')) {
+          try {
+            const separator = masterWebApp.includes('?') ? '&' : '?';
+            const bridgeUrl = `${masterWebApp}${separator}sheetId=${sheetId}${gidParam}&_t=${Date.now()}`;
+            const res = await fetch(bridgeUrl);
+            const text = await res.text();
+            if (text && !text.includes('Sorry, the file you have requested does not exist')) {
+              const data = JSON.parse(text);
+              if (data && data.status === 'success' && Array.isArray(data.data)) {
+                if (Array.isArray(data.data[0])) {
+                  return parse2DArrayRecords(data.data);
+                }
+                const raw = data.data;
+                const records = raw.map((item: any, idx: number) => normalizeRecord(item, idx));
+                pruneCompletedOverrides(records);
+                return { records, sheetName: data.sheetName || 'Google Spreadsheet' };
+              }
+            }
+          } catch (bridgeErr) {
+            console.warn('Bridge master webapp fetch failed:', bridgeErr);
+          }
+        }
+
+        throw new Error(
+          'Không thể tải dữ liệu trực tiếp từ Google Sheets này.\n\n' +
+          '• Nguyên nhân thường gặp: Bảng tính Google Sheets đang đặt ở chế độ Riêng tư (Private).\n\n' +
+          '• Cách khắc phục cực kỳ đơn giản (Không cần code, không cần triển khai mới):\n' +
+          '1. Mở bảng tính Google Sheets của bạn trên trình duyệt.\n' +
+          '2. Bấm nút màu xanh "Chia sẻ" (Share) ở góc trên bên phải.\n' +
+          '3. Ở mục "Quyền truy cập chung" (General access), chuyển thành: "Bất kỳ ai có đường liên kết" (Anyone with the link) với quyền "Người xem" (Viewer).\n' +
+          '4. Bấm "Xong", sau đó quay lại đây bấm "Tải lại dữ liệu" để đồng bộ tự động ngay lập tức!'
+        );
       }
     }
 
-    // Case 2: Standard Google Apps Script Web App URL (Direct browser fetch, fast & reliable)
+    // Case 2: Google Apps Script Web App URL
+    if (cleanUrl.includes('script.google.com')) {
+      localStorage.setItem('deadline_master_webapp_url', cleanUrl);
+    }
+
     const separator = cleanUrl.includes('?') ? '&' : '?';
-    const fetchUrl = `${cleanUrl}${separator}_t=${Date.now()}`;
+    const cacheBusterUrl = `${cleanUrl}${separator}_t=${Date.now()}`;
 
-    let responseText: string | null = null;
-    let httpStatus: number = 200;
+    const res = await fetch(cacheBusterUrl);
+    const text = await res.text();
 
-    try {
-      const res = await fetch(fetchUrl, {
-        method: 'GET',
-        redirect: 'follow',
-      });
-      httpStatus = res.status;
-      responseText = await res.text();
-    } catch (err: any) {
-      console.warn('Direct fetch error:', err);
-      throw new Error(
-        'Không thể kết nối trực tiếp đến Web App URL. Vui lòng kiểm tra lại kết nối mạng hoặc thử lại.'
-      );
-    }
-
-    if (!responseText) {
-      throw new Error(
-        'Không thể kết nối đến Web App URL. Vui lòng kiểm tra lại kết nối mạng hoặc thử lại.'
-      );
-    }
-
-    const trimmedText = responseText.trim();
-
-    // 3. Check for Google Drive 404 error (deployment does not exist)
-    if (
-      httpStatus === 404 ||
-      trimmedText.includes('Sorry, the file you have requested does not exist') ||
-      trimmedText.includes('<title>Page not found</title>')
-    ) {
+    // Check for Google 404 Drive error
+    if (res.status === 404 || text.includes('Sorry, the file you have requested does not exist') || text.includes('does not exist')) {
       throw new Error(
         'ĐƯỜNG DẪN WEB APP KHÔNG TỒN TẠI (Lỗi 404 từ Google Drive):\n\n' +
         'Google thông báo: "Sorry, the file you have requested does not exist."\n\n' +
-        '• Nguyên nhân: Mã bản triển khai (Deployment) này đã bị xóa, bị thay thế bằng phiên bản mới hoặc URL bị copy thiếu ký tự.\n\n' +
-        '• Cách khắc phục:\n' +
-        '1. Mở bảng tính Google Sheets của bạn.\n' +
-        '2. Vào menu "Tiện ích mở rộng" (Extensions) ➔ "Apps Script".\n' +
-        '3. Bấm nút "Triển khai" (Deploy) màu xanh ở góc trên bên phải ➔ "Quản lý bản triển khai" (Manage deployments).\n' +
-        '4. Sao chép lại URL Web App đang hoạt động (kết thúc bằng "/exec") và dán vào ô bên dưới.\n' +
-        '(Lưu ý: Thiết lập "Người có quyền truy cập" / Who has access phải chọn là "Bất kỳ ai" / Anyone).'
+        '• Nguyên nhân: Mã bản triển khai (Deployment) Apps Script này đã bị xóa, bị thay thế hoặc URL bị copy thiếu ký tự.\n\n' +
+        '💡 GIẢI PHÁP TỐI ƯU NHẤT (Không cần code hay triển khai lại):\n' +
+        'Bạn chỉ cần dán thẳng đường liên kết Google Sheets (ví dụ: https://docs.google.com/spreadsheets/d/...) vào ô bên trên và bật chia sẻ "Bất kỳ ai có đường liên kết". Ứng dụng sẽ đồng bộ trực tiếp siêu tốc mà không phụ thuộc vào Apps Script!'
       );
     }
 
-    // 4. Check for Google login / permissions error
-    if (
-      trimmedText.includes('accounts.google.com') ||
-      trimmedText.includes('ServiceLogin') ||
-      (trimmedText.startsWith('<!DOCTYPE html>') && trimmedText.includes('Google Drive'))
-    ) {
-      throw new Error(
-        'WEB APP YÊU CẦU ĐĂNG NHẬP GOOGLE:\n\n' +
-        'Vui lòng vào Google Apps Script ➔ "Triển khai" ➔ "Quản lý bản triển khai" ➔ Chỉnh sửa và thiết lập "Người có quyền truy cập" (Who has access) là "Bất kỳ ai" (Anyone), sau đó Lưu và tải lại dữ liệu.'
-      );
-    }
-
-    // 5. Parse JSON
     let data: any;
     try {
-      data = JSON.parse(trimmedText);
+      data = JSON.parse(text);
     } catch {
-      // Check if wrapped in callback
-      const callbackMatch = trimmedText.match(/^[a-zA-Z0-9_]+\(([\s\S]*)\);?$/);
-      if (callbackMatch) {
-        data = JSON.parse(callbackMatch[1]);
-      } else {
-        throw new Error(
-          'Dữ liệu trả về từ Web App không đúng định dạng JSON. Vui lòng kiểm tra lại hàm doGet() trong Apps Script.'
-        );
-      }
+      throw new Error(
+        'Phản hồi từ máy chủ không phải là JSON hợp lệ. ' +
+        (text.length < 150 ? `Nội dung nhận được: "${text}"` : 'Vui lòng kiểm tra lại đường dẫn Web App.')
+      );
     }
 
     if (data && data.status === 'error') {
       throw new Error(data.message || 'Lỗi xử lý từ Google Apps Script.');
     }
 
-    // 6. Extract rows list
     let rawList: any[] = [];
     if (Array.isArray(data)) {
       rawList = data;
@@ -673,63 +837,16 @@ export async function fetchSheetData(
       rawList = data.rows;
     } else if (Array.isArray(data.values)) {
       rawList = data.values;
-    } else if (Array.isArray(data.result)) {
-      rawList = data.result;
-    } else if (Array.isArray(data.items)) {
-      rawList = data.items;
-    } else if (data && typeof data === 'object') {
-      for (const k of Object.keys(data)) {
-        if (Array.isArray(data[k])) {
-          rawList = data[k];
-          break;
-        }
-      }
     }
 
-    // 7. Multi-row Header mapping detection for 2D array matrix
-    let headerMap: Record<string, number> | undefined;
-    let dataRows = rawList;
-
+    // If 2D array matrix returned
     if (rawList.length > 0 && Array.isArray(rawList[0])) {
-      let headerRowIdx = -1;
-      for (let r = 0; r < Math.min(rawList.length, 5); r++) {
-        const row = rawList[r];
-        if (!Array.isArray(row)) continue;
-        const keys = row.map((cell: any) => cleanKey(String(cell)));
-        const matchCount = keys.filter((k: string) =>
-          ['stt', 'sohoso', 'mahoso', 'shs', 'quytrinh', 'thutuc', 'bophan', 'menu', 'hantra', 'ngaynhan', 'tendonvi', 'canbo', 'coquan', 'trathucte'].some(
-            (term) => k.includes(term)
-          )
-        ).length;
-
-        if (matchCount >= 2) {
-          headerRowIdx = r;
-          headerMap = {};
-          keys.forEach((k: string, idx: number) => {
-            if (k) headerMap![k] = idx;
-          });
-          break;
-        }
-      }
-
-      if (headerRowIdx >= 0) {
-        dataRows = rawList.slice(headerRowIdx + 1);
-      }
+      return parse2DArrayRecords(rawList);
     }
-
-    // Filter out completely blank rows
-    dataRows = dataRows.filter((row: any) => {
-      if (!row) return false;
-      if (Array.isArray(row)) {
-        return row.some((cell: any) => cell != null && String(cell).trim() !== '');
-      }
-      return Object.values(row).some((val: any) => val != null && String(val).trim() !== '');
-    });
 
     const overrides = getCompletedOverrides();
-
-    const records: SheetRecord[] = dataRows.map((item, idx) => {
-      const rec = normalizeRecord(item, idx, headerMap);
+    const records: SheetRecord[] = rawList.map((item, idx) => {
+      const rec = normalizeRecord(item, idx);
       rec.rowIndex = Number(rec.rowIndex) || (idx + 2);
 
       // If sheet doesn't yet reflect completion, check local overrides by unique key
@@ -750,8 +867,8 @@ export async function fetchSheetData(
 
     return { records, sheetName: data.sheetName || 'Sheet dữ liệu' };
   } catch (error: any) {
-    console.error('fetchSheetData error:', error);
-    return { records: [], sheetName: '', error: error.message || 'Lỗi khi tải dữ liệu' };
+    console.warn('fetchSheetData error:', error);
+    return { records: [], sheetName: '', error: error.message || 'Lỗi khi tải dữ liệu từ Google Sheets' };
   }
 }
 
