@@ -1,5 +1,13 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { SheetRecord, markRecordCompleted, markMultipleRecordsCompleted } from '../lib/sheets';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import {
+  SheetRecord,
+  markRecordCompleted,
+  markMultipleRecordsCompleted,
+  saveCompletedOverride,
+  removeCompletedOverride,
+  saveCompletedOverridesBatch,
+  getCompletedOverrides,
+} from '../lib/sheets';
 import {
   parseDate,
   calculateTimeRemaining,
@@ -9,25 +17,24 @@ import {
 } from '../lib/dateUtils';
 import { cn } from '../lib/utils';
 import {
-  Check,
+  Search,
+  Filter,
   CheckCircle2,
   Clock,
   AlertTriangle,
-  Search,
-  Filter,
   Layers,
   LayoutGrid,
+  Check,
   AlignLeft,
   ChevronsUpDown,
   RotateCcw,
   CheckSquare,
   X,
   Loader2,
-  ListChecks,
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
-  Sparkles,
+  Undo2,
 } from 'lucide-react';
 
 export type SortOption =
@@ -43,7 +50,8 @@ interface RecordTableProps {
   records: SheetRecord[];
   webAppUrl: string;
   onRefresh: () => void;
-  onUpdateRecord?: (rowIndex: number, timestampStr: string) => void;
+  onUpdateRecord?: (rowIndex: number, timestampStr: string, soHoSo?: string) => void;
+  onUndoRecord?: (rowIndex: number, soHoSo?: string) => void;
   onUpdateMultipleRecords?: (rowIndices: number[], timestampStr: string) => void;
 }
 
@@ -52,15 +60,39 @@ export function RecordTable({
   webAppUrl,
   onRefresh,
   onUpdateRecord,
+  onUndoRecord,
   onUpdateMultipleRecords,
 }: RecordTableProps) {
   const [now, setNow] = useState(new Date());
   const [processingRows, setProcessingRows] = useState<Set<number>>(new Set());
 
+  // Local completed overrides state to guarantee instant UI update without waiting for network
+  const [localCompletedMap, setLocalCompletedMap] = useState<Record<string, string>>(() =>
+    getCompletedOverrides()
+  );
+
+  // Sync with records or local storage
+  useEffect(() => {
+    setLocalCompletedMap(getCompletedOverrides());
+  }, [records]);
+
   // Multi-select state
   const [selectedRowIndices, setSelectedRowIndices] = useState<Set<number>>(new Set());
   const [isBatchProcessing, setIsBatchProcessing] = useState(false);
   const [batchProgress, setBatchProgress] = useState<{ current: number; total: number } | null>(null);
+
+  // Toast notification for user action feedback
+  const [toastMessage, setToastMessage] = useState<{
+    text: string;
+    record?: SheetRecord;
+  } | null>(null);
+
+  useEffect(() => {
+    if (toastMessage) {
+      const timer = setTimeout(() => setToastMessage(null), 6000);
+      return () => clearTimeout(timer);
+    }
+  }, [toastMessage]);
 
   // Search and filter states
   const [searchTerm, setSearchTerm] = useState('');
@@ -126,8 +158,16 @@ export function RecordTable({
       .map((record) => {
         const ngayTraDate = parseDate(record.ngayTra);
         const ngayNhanDate = parseDate(record.ngayNhan);
-        const traThucTeDate = parseDate(record.traThucTe);
-        const isCompleted = !!record.traThucTe && record.traThucTe.trim().length > 0;
+
+        // Check local override or recorded traThucTe
+        const overrideTimestamp =
+          localCompletedMap[String(record.rowIndex)] ||
+          (record.soHoSo ? localCompletedMap[`shs_${record.soHoSo.trim()}`] : undefined);
+        const traThucTe = (record.traThucTe && record.traThucTe.trim().length > 0)
+          ? record.traThucTe
+          : (overrideTimestamp || '');
+        const traThucTeDate = parseDate(traThucTe);
+        const isCompleted = !!traThucTe && traThucTe.trim().length > 0;
 
         const referenceDate = isCompleted ? traThucTeDate || now : now;
         const tr = calculateTimeRemaining(ngayTraDate, referenceDate);
@@ -136,6 +176,7 @@ export function RecordTable({
 
         return {
           ...record,
+          traThucTe,
           ngayTraDate,
           ngayNhanDate,
           traThucTeDate,
@@ -146,30 +187,28 @@ export function RecordTable({
         };
       })
       .sort((a, b) => {
-        // Priority 1: Uncompleted records ALWAYS come before Completed records (except when sorting strictly by STT)
-        if (sortOption !== 'stt_asc') {
-          if (!a.isCompleted && b.isCompleted) return -1;
-          if (a.isCompleted && !b.isCompleted) return 1;
-        }
+        // Priority 1: Uncompleted records ALWAYS come before Completed records.
+        // Completed records ALWAYS go down below ("Đã hoàn thành xuống phía dưới")
+        if (!a.isCompleted && b.isCompleted) return -1;
+        if (a.isCompleted && !b.isCompleted) return 1;
 
         // When comparing two uncompleted records:
         if (!a.isCompleted && !b.isCompleted) {
           switch (sortOption) {
             case 'upcoming_closest': {
               // 1. Hồ sơ SẮP ĐẾN HẠN (chưa quá hạn, tr.totalSeconds >= 0): ĐẨY LÊN ĐẦU TIÊN
-              // Sắp xếp tăng dần theo thời gian còn lại (còn ít thời gian nhất lên trước: 10 phút -> 1h -> 1 ngày...)
+              // Sắp xếp tăng dần theo thời gian còn lại (còn ít thời gian nhất lên trước)
               if (!a.isOverdue && !b.isOverdue) {
                 const aSec = a.tr ? a.tr.totalSeconds : Number.MAX_SAFE_INTEGER;
                 const bSec = b.tr ? b.tr.totalSeconds : Number.MAX_SAFE_INTEGER;
                 if (aSec !== bSec) return aSec - bSec;
               }
 
-              // Sắp đến hạn ưu tiên trước quá hạn (Sắp đến hạn mới nhất, gần nhất đẩy lên đầu)
+              // Sắp đến hạn ưu tiên trước quá hạn
               if (!a.isOverdue && b.isOverdue) return -1;
               if (a.isOverdue && !b.isOverdue) return 1;
 
               // Cả hai đều quá hạn: Hồ sơ vừa mới quá hạn gần đây nhất lên trước
-              // (ví dụ: vừa quá hạn 10 phút lên trước hồ sơ quá hạn 2 tháng)
               if (a.isOverdue && b.isOverdue) {
                 const aSec = a.tr ? a.tr.totalSeconds : -Number.MAX_SAFE_INTEGER;
                 const bSec = b.tr ? b.tr.totalSeconds : -Number.MAX_SAFE_INTEGER;
@@ -179,7 +218,6 @@ export function RecordTable({
             }
 
             case 'closest_to_now': {
-              // Khoảng cách thời gian ngắn nhất so với hiện tại (|totalSeconds| nhỏ nhất)
               const aDiff = a.tr ? Math.abs(a.tr.totalSeconds) : Number.MAX_SAFE_INTEGER;
               const bDiff = b.tr ? Math.abs(b.tr.totalSeconds) : Number.MAX_SAFE_INTEGER;
               if (aDiff !== bDiff) return aDiff - bDiff;
@@ -187,7 +225,6 @@ export function RecordTable({
             }
 
             case 'overdue_first': {
-              // Quá hạn trước, sau đó đến sắp đến hạn
               if (a.isOverdue && !b.isOverdue) return -1;
               if (!a.isOverdue && b.isOverdue) return 1;
 
@@ -228,7 +265,7 @@ export function RecordTable({
 
             case 'stt_asc':
             default:
-              return a.rowIndex - b.rowIndex;
+              return Number(a.rowIndex) - Number(b.rowIndex);
           }
         }
 
@@ -239,9 +276,9 @@ export function RecordTable({
           }
         }
 
-        return a.rowIndex - b.rowIndex;
+        return Number(a.rowIndex) - Number(b.rowIndex);
       });
-  }, [records, now, sortOption]);
+  }, [records, now, sortOption, localCompletedMap]);
 
   // Extract unique lists for filtering
   const uniqueBoPhanList = useMemo(() => {
@@ -312,22 +349,26 @@ export function RecordTable({
     });
   }, [processedRecords, searchTerm, selectedBoPhan, selectedMenu, statusFilter]);
 
-  // Uncompleted records in current filtered view (candidates for multi-select)
-  const uncompletedInView = useMemo(() => {
+  // Split into uncompleted and completed lists
+  const uncompletedList = useMemo(() => {
     return filteredRecords.filter((r) => !r.isCompleted);
+  }, [filteredRecords]);
+
+  const completedList = useMemo(() => {
+    return filteredRecords.filter((r) => r.isCompleted);
   }, [filteredRecords]);
 
   // Check if all uncompleted in view are selected
   const isAllInViewSelected = useMemo(() => {
-    if (uncompletedInView.length === 0) return false;
-    return uncompletedInView.every((r) => selectedRowIndices.has(r.rowIndex));
-  }, [uncompletedInView, selectedRowIndices]);
+    if (uncompletedList.length === 0) return false;
+    return uncompletedList.every((r) => selectedRowIndices.has(r.rowIndex));
+  }, [uncompletedList, selectedRowIndices]);
 
   // Check if some uncompleted in view are selected
   const isSomeInViewSelected = useMemo(() => {
     if (isAllInViewSelected) return false;
-    return uncompletedInView.some((r) => selectedRowIndices.has(r.rowIndex));
-  }, [uncompletedInView, selectedRowIndices, isAllInViewSelected]);
+    return uncompletedList.some((r) => selectedRowIndices.has(r.rowIndex));
+  }, [uncompletedList, selectedRowIndices, isAllInViewSelected]);
 
   // Update indeterminate state of header checkbox
   useEffect(() => {
@@ -350,25 +391,18 @@ export function RecordTable({
 
   const toggleSelectAllInView = () => {
     if (isAllInViewSelected) {
-      // Unselect all in current view
       setSelectedRowIndices((prev) => {
         const next = new Set(prev);
-        uncompletedInView.forEach((r) => next.delete(r.rowIndex));
+        uncompletedList.forEach((r) => next.delete(r.rowIndex));
         return next;
       });
     } else {
-      // Select all in current view
       setSelectedRowIndices((prev) => {
         const next = new Set(prev);
-        uncompletedInView.forEach((r) => next.add(r.rowIndex));
+        uncompletedList.forEach((r) => next.add(r.rowIndex));
         return next;
       });
     }
-  };
-
-  const handleSelectAllUncompleted = () => {
-    const uncompletedAll = processedRecords.filter((r) => !r.isCompleted);
-    setSelectedRowIndices(new Set(uncompletedAll.map((r) => r.rowIndex)));
   };
 
   const handleClearSelection = () => {
@@ -388,61 +422,106 @@ export function RecordTable({
     selectedMenu !== 'all' ||
     statusFilter !== 'all';
 
-  // Single mark complete
-  const handleMarkComplete = async (record: SheetRecord) => {
+  // 1. Single mark complete: INSTANT optimistic update, NO blocking window.confirm, moves down immediately
+  const handleMarkComplete = (record: SheetRecord) => {
     const todayStr = getCurrentDateStr();
-    const confirmed = window.confirm(
-      `Đánh dấu hoàn thành hồ sơ ${record.soHoSo || record.stt}? Thao tác này sẽ ghi nhận hoàn thành và chuyển ngay hồ sơ xuống danh sách Đã hoàn thành phía dưới.`
-    );
-    if (!confirmed) return;
 
-    // 1. OPTIMISTIC UPDATE: Ngay lập tức cập nhật trạng thái đã hoàn thành và đẩy xuống danh sách dưới cùng
+    // 1. Optimistic instant local update
+    setLocalCompletedMap((prev) => ({
+      ...prev,
+      [String(record.rowIndex)]: todayStr,
+      ...(record.soHoSo ? { [`shs_${record.soHoSo.trim()}`]: todayStr } : {}),
+    }));
+    saveCompletedOverride(record.rowIndex, record.soHoSo, todayStr);
+
     if (onUpdateRecord) {
-      onUpdateRecord(record.rowIndex, todayStr);
+      onUpdateRecord(record.rowIndex, todayStr, record.soHoSo);
     }
+
     setSelectedRowIndices((prev) => {
       const next = new Set(prev);
       next.delete(record.rowIndex);
       return next;
     });
 
-    // 2. Đồng bộ ngầm lên Google Sheets (nếu có Web App URL)
+    setToastMessage({
+      text: `✓ Đã hoàn thành hồ sơ ${record.soHoSo || record.stt} và chuyển ngay xuống danh sách Đã hoàn thành phía dưới!`,
+      record: { ...record, traThucTe: todayStr },
+    });
+
+    // 2. Background sync to Google Sheets
     if (webAppUrl) {
       setProcessingRows((prev) => new Set(prev).add(record.rowIndex));
-      try {
-        await markRecordCompleted(webAppUrl, record.rowIndex, todayStr);
-      } catch (e: any) {
-        console.warn('Sync to sheet background warning:', e);
-      } finally {
-        setProcessingRows((prev) => {
-          const next = new Set(prev);
-          next.delete(record.rowIndex);
-          return next;
+      markRecordCompleted(webAppUrl, record.rowIndex, todayStr)
+        .catch((e) => console.warn('Background sync warning:', e))
+        .finally(() => {
+          setProcessingRows((prev) => {
+            const next = new Set(prev);
+            next.delete(record.rowIndex);
+            return next;
+          });
         });
-      }
     }
   };
 
-  // Batch mark complete for all checked records
-  const handleBatchMarkComplete = async () => {
-    if (selectedRowIndices.size === 0) return;
+  // 2. Undo complete: Returns record back to uncompleted section immediately
+  const handleUndoComplete = (record: SheetRecord) => {
+    setLocalCompletedMap((prev) => {
+      const next = { ...prev };
+      delete next[String(record.rowIndex)];
+      if (record.soHoSo) delete next[`shs_${record.soHoSo.trim()}`];
+      return next;
+    });
+    removeCompletedOverride(record.rowIndex, record.soHoSo);
 
-    const count = selectedRowIndices.size;
-    const confirmed = window.confirm(
-      `Bạn có chắc chắn muốn hoàn thành ${count} hồ sơ đã chọn? Toàn bộ các hồ sơ này sẽ được chuyển ngay xuống danh sách Đã hoàn thành phía dưới.`
-    );
-    if (!confirmed) return;
+    if (onUndoRecord) {
+      onUndoRecord(record.rowIndex, record.soHoSo);
+    }
 
+    setToastMessage({
+      text: `Đã hoàn tác hồ sơ ${record.soHoSo || record.stt} về danh sách Đang xử lý.`,
+    });
+  };
+
+  // 3. Batch mark complete: triggered by "Tích chọn" button in toolbar or floating bar
+  const handleTichChonBatch = () => {
+    // If rows were individually ticked via checkboxes, process those. Otherwise, process all uncompleted in view!
+    const targetRecords = selectedRowIndices.size > 0
+      ? filteredRecords.filter((r) => !r.isCompleted && selectedRowIndices.has(r.rowIndex))
+      : filteredRecords.filter((r) => !r.isCompleted);
+
+    if (targetRecords.length === 0) return;
+
+    const count = targetRecords.length;
     const todayStr = getCurrentDateStr();
-    const rowIndicesToProcess: number[] = Array.from(selectedRowIndices);
+    const rowIndicesToProcess = targetRecords.map((r) => r.rowIndex);
 
-    // 1. OPTIMISTIC UPDATE: Ngay lập tức cập nhật tất cả hồ sơ đã chọn sang Hoàn thành và đẩy xuống dưới
+    // 1. Optimistic instant local update: ALL target records move down immediately
+    setLocalCompletedMap((prev) => {
+      const next = { ...prev };
+      targetRecords.forEach((r) => {
+        next[String(r.rowIndex)] = todayStr;
+        if (r.soHoSo) next[`shs_${r.soHoSo.trim()}`] = todayStr;
+      });
+      return next;
+    });
+
+    saveCompletedOverridesBatch(
+      targetRecords.map((r) => ({ rowIndex: r.rowIndex, soHoSo: r.soHoSo })),
+      todayStr
+    );
+
     if (onUpdateMultipleRecords) {
       onUpdateMultipleRecords(rowIndicesToProcess, todayStr);
     }
+
     setSelectedRowIndices(new Set());
 
-    // 2. Đồng bộ ngầm lên Google Sheets (nếu có Web App URL)
+    setToastMessage({
+      text: `✓ Đã hoàn thành ${count} hồ sơ và chuyển ngay xuống danh sách Đã hoàn thành phía dưới!`,
+    });
+
+    // 2. Background sync to Google Sheets
     if (webAppUrl) {
       setIsBatchProcessing(true);
       setBatchProgress({ current: 0, total: count });
@@ -452,26 +531,22 @@ export function RecordTable({
         return next;
       });
 
-      try {
-        await markMultipleRecordsCompleted(
-          webAppUrl,
-          rowIndicesToProcess,
-          todayStr,
-          (current, total) => {
-            setBatchProgress({ current, total });
-          }
-        );
-      } catch (e: any) {
-        console.warn('Batch sync background warning:', e);
-      } finally {
-        setIsBatchProcessing(false);
-        setBatchProgress(null);
-        setProcessingRows((prev) => {
-          const next = new Set(prev);
-          rowIndicesToProcess.forEach((idx) => next.delete(idx));
-          return next;
+      markMultipleRecordsCompleted(
+        webAppUrl,
+        rowIndicesToProcess,
+        todayStr,
+        (current, total) => setBatchProgress({ current, total })
+      )
+        .catch((e) => console.warn('Batch sync warning:', e))
+        .finally(() => {
+          setIsBatchProcessing(false);
+          setBatchProgress(null);
+          setProcessingRows((prev) => {
+            const next = new Set(prev);
+            rowIndicesToProcess.forEach((idx) => next.delete(idx));
+            return next;
+          });
         });
-      }
     }
   };
 
@@ -487,6 +562,38 @@ export function RecordTable({
 
   return (
     <div className="flex flex-col gap-3">
+      {/* Toast Notification Banner */}
+      {toastMessage && (
+        <div className="mx-4 p-3 bg-emerald-900 text-white rounded-xl shadow-lg border border-emerald-700 flex items-center justify-between gap-3 animate-in fade-in slide-in-from-top-2 duration-200 sticky top-16 z-30">
+          <div className="flex items-center gap-2 text-xs sm:text-sm font-semibold">
+            <CheckCircle2 className="w-5 h-5 text-emerald-300 shrink-0" />
+            <span>{toastMessage.text}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            {toastMessage.record && (
+              <button
+                onClick={() => {
+                  handleUndoComplete(toastMessage.record!);
+                  setToastMessage(null);
+                }}
+                className="flex items-center gap-1 bg-emerald-800 hover:bg-emerald-700 text-emerald-100 px-3 py-1.5 rounded-lg text-xs font-bold border border-emerald-600 transition-colors cursor-pointer"
+                title="Bấm để hoàn tác lại hồ sơ này"
+              >
+                <Undo2 className="w-3.5 h-3.5" />
+                <span>Hoàn tác</span>
+              </button>
+            )}
+            <button
+              onClick={() => setToastMessage(null)}
+              className="p-1 hover:bg-emerald-800 rounded-md text-emerald-200 transition-colors cursor-pointer"
+              title="Đóng thông báo"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Alert banner if overdue exists */}
       {(overdueCount > 0 || warningCount > 0) && (
         <div className="mx-4 mt-3 p-3 bg-amber-50/90 border border-amber-200 rounded-xl flex items-center gap-3 text-amber-900 shadow-2xs">
@@ -519,14 +626,14 @@ export function RecordTable({
                 Đã chọn {selectedRowIndices.size} hồ sơ cần hoàn thành
               </div>
               <div className="text-xs text-emerald-200">
-                Nhấn nút bên cạnh để ghi nhận hoàn thành cùng lúc cho tất cả các hồ sơ đã tích
+                Nhấn nút bên cạnh để hoàn thành và chuyển ngay toàn bộ hồ sơ đã chọn xuống phía dưới
               </div>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
             <button
-              onClick={handleBatchMarkComplete}
+              onClick={handleTichChonBatch}
               disabled={isBatchProcessing}
               className="flex items-center gap-2 bg-white hover:bg-emerald-50 text-emerald-900 px-4 py-2 rounded-lg font-bold text-xs sm:text-sm shadow-sm transition-all cursor-pointer disabled:opacity-60"
             >
@@ -551,7 +658,7 @@ export function RecordTable({
               onClick={handleClearSelection}
               disabled={isBatchProcessing}
               className="flex items-center gap-1.5 bg-emerald-900/80 hover:bg-emerald-950 text-white px-3 py-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer disabled:opacity-50"
-              title="Bỏ chọn tất cả"
+              title="Bỏ chọn"
             >
               <X className="w-3.5 h-3.5" />
               <span>Bỏ chọn</span>
@@ -576,15 +683,16 @@ export function RecordTable({
 
         {/* Dropdowns & Display Toggles */}
         <div className="flex flex-wrap items-center gap-2 text-xs sm:text-sm">
-          {/* Quick Select Button */}
+          {/* Quick "Tích chọn" Button (without the word "tất cả") */}
           {totalUncompletedCount > 0 && (
             <button
-              onClick={handleSelectAllUncompleted}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-sm transition-colors cursor-pointer"
-              title="Tích chọn hồ sơ chưa hoàn thành để xử lý cùng lúc"
+              onClick={handleTichChonBatch}
+              disabled={isBatchProcessing}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-sm transition-colors cursor-pointer disabled:opacity-50"
+              title="Tích chọn và chuyển ngay hồ sơ chưa hoàn thành xuống danh sách Đã hoàn thành phía dưới"
             >
               <CheckSquare className="w-4 h-4 text-white" />
-              <span>Tích chọn ({totalUncompletedCount})</span>
+              <span>Tích chọn ({selectedRowIndices.size > 0 ? selectedRowIndices.size : totalUncompletedCount})</span>
             </button>
           )}
 
@@ -596,7 +704,7 @@ export function RecordTable({
               value={sortOption}
               onChange={(e) => handleSortChange(e.target.value as SortOption)}
               className="bg-transparent border-none text-emerald-950 font-bold focus:outline-none text-xs cursor-pointer max-w-[210px] truncate"
-              title="Tiêu chí sắp xếp danh sách hồ sơ: Sắp đến hạn mới nhất, gần nhất đẩy lên đầu"
+              title="Tiêu chí sắp xếp: Sắp đến hạn mới nhất, gần nhất đẩy lên đầu"
             >
               <option value="upcoming_closest">⚡ Sắp đến hạn gần nhất (Lên đầu)</option>
               <option value="closest_to_now">⏱️ Hạn chót sát giờ hiện tại nhất</option>
@@ -687,8 +795,8 @@ export function RecordTable({
             )}
             title={
               isWrapText
-                ? 'Đang bật hiển thị đầy đủ chữ (xuống dòng tự nhiên). Bấm để chuyển sang thu gọn 1 dòng (...)'
-                : 'Đang bật thu gọn 1 dòng. Bấm để hiển thị trọn vẹn toàn bộ chữ không bị cắt bớt'
+                ? 'Đang bật hiển thị đầy đủ chữ. Bấm để chuyển sang thu gọn 1 dòng'
+                : 'Đang bật thu gọn 1 dòng. Bấm để hiển thị trọn vẹn toàn bộ chữ'
             }
           >
             <AlignLeft className="w-3.5 h-3.5" />
@@ -716,23 +824,23 @@ export function RecordTable({
         </div>
       </div>
 
-      {/* Main Table Container: Full Landscape with comfortable horizontal scroll when needed */}
+      {/* Main Table Container */}
       <div className="overflow-x-auto bg-white border-t border-slate-200">
         <table className="w-full min-w-full text-xs xl:text-sm text-left border-collapse">
           <thead className="bg-slate-100/90 text-slate-700 font-semibold border-b border-slate-200 text-xs uppercase tracking-wider sticky top-0 z-10 backdrop-blur-xs">
             <tr>
-              {/* Checkbox All column */}
+              {/* Checkbox Column */}
               <th className="px-2 py-3 w-16 text-center whitespace-nowrap bg-emerald-100/90 text-emerald-950 font-bold border-r border-emerald-200">
-                <label className="flex items-center justify-center gap-1.5 cursor-pointer select-none" title="Tích chọn / Bỏ chọn tất cả hồ sơ trong bảng">
+                <label className="flex items-center justify-center gap-1.5 cursor-pointer select-none" title="Tích chọn">
                   <input
                     type="checkbox"
                     ref={headerCheckboxRef}
                     checked={isAllInViewSelected}
                     onChange={toggleSelectAllInView}
-                    disabled={uncompletedInView.length === 0}
+                    disabled={uncompletedList.length === 0}
                     className="w-4 h-4 rounded text-emerald-600 border-slate-300 focus:ring-emerald-500 cursor-pointer disabled:opacity-40 accent-emerald-600"
                   />
-                  <span className="text-[11px] font-bold text-emerald-900 uppercase">CHỌN</span>
+                  <span className="text-[11px] font-bold text-emerald-900 uppercase">TÍCH CHỌN</span>
                 </label>
               </th>
               <th
@@ -826,7 +934,7 @@ export function RecordTable({
                   )}
                 </div>
               </th>
-              <th className="px-3 py-3 text-center whitespace-nowrap w-20">Hoàn Thành</th>
+              <th className="px-3 py-3 text-center whitespace-nowrap w-24">Hoàn Thành</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -842,7 +950,7 @@ export function RecordTable({
                     {hasActiveFilters && (
                       <button
                         onClick={handleResetFilters}
-                        className="text-xs text-emerald-600 hover:text-emerald-700 font-medium underline"
+                        className="text-xs text-emerald-600 hover:text-emerald-700 font-medium underline cursor-pointer"
                       >
                         Bấm vào đây để xóa bộ lọc
                       </button>
@@ -851,220 +959,364 @@ export function RecordTable({
                 </td>
               </tr>
             ) : (
-              filteredRecords.map((record, idx) => {
-                const isSelected = selectedRowIndices.has(record.rowIndex);
-                const isProcessing = processingRows.has(record.rowIndex);
+              <>
+                {/* SECTION 1: HỒ SƠ ĐANG XỬ LÝ (CHƯA HOÀN THÀNH) */}
+                {uncompletedList.map((record, idx) => {
+                  const isSelected = selectedRowIndices.has(record.rowIndex);
+                  const isProcessing = processingRows.has(record.rowIndex);
 
-                const statusColorClass = !record.isCompleted
-                  ? {
-                      overdue: 'bg-red-50 text-red-700 border-red-200',
-                      'warning-1': 'bg-orange-50 text-orange-700 border-orange-200',
-                      'warning-2': 'bg-amber-50 text-amber-700 border-amber-200',
-                      'warning-3': 'bg-yellow-50 text-yellow-700 border-yellow-200',
-                      safe: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-                      none: 'bg-slate-50 text-slate-600 border-slate-200',
-                    }[record.warningStatus]
-                  : record.isOverdue
-                  ? 'bg-red-50 text-red-700 border-red-200'
-                  : 'bg-emerald-50 text-emerald-700 border-emerald-200';
+                  const statusColorClass = {
+                    overdue: 'bg-red-50 text-red-700 border-red-200',
+                    'warning-1': 'bg-orange-50 text-orange-700 border-orange-200',
+                    'warning-2': 'bg-amber-50 text-amber-700 border-amber-200',
+                    'warning-3': 'bg-yellow-50 text-yellow-700 border-yellow-200',
+                    safe: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+                    none: 'bg-slate-50 text-slate-600 border-slate-200',
+                  }[record.warningStatus];
 
-                return (
-                  <tr
-                    key={record.rowIndex}
-                    className={cn(
-                      'transition-colors',
-                      isSelected
-                        ? 'bg-emerald-50/80 font-medium'
-                        : 'odd:bg-white even:bg-slate-50/40 hover:bg-emerald-50/30'
-                    )}
-                  >
-                    {/* Checkbox column */}
-                    <td className={cn(cellPadding, 'text-center')}>
-                      {record.isCompleted ? (
-                        <span
-                          className="inline-flex items-center justify-center text-emerald-600/70"
-                          title="Hồ sơ đã được đánh dấu hoàn thành"
+                  return (
+                    <tr
+                      key={record.rowIndex}
+                      className={cn(
+                        'transition-colors',
+                        isSelected
+                          ? 'bg-emerald-50/80 font-medium'
+                          : 'odd:bg-white even:bg-slate-50/40 hover:bg-emerald-50/30'
+                      )}
+                    >
+                      {/* Checkbox column: Ticking instantly marks complete and moves down! */}
+                      <td className={cn(cellPadding, 'text-center')}>
+                        <button
+                          type="button"
+                          onClick={() => handleMarkComplete(record)}
+                          disabled={isProcessing || isBatchProcessing}
+                          className="w-5 h-5 rounded border border-slate-300 hover:border-emerald-500 hover:bg-emerald-50 inline-flex items-center justify-center transition-all cursor-pointer disabled:opacity-50 group"
+                          title="Tích vào đây để hoàn thành và chuyển ngay hồ sơ này xuống phía dưới"
                         >
-                          <Check className="w-4 h-4 text-emerald-600" />
-                        </span>
-                      ) : (
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={() => toggleSelectRow(record.rowIndex)}
-                          disabled={isProcessing}
-                          className="w-4 h-4 rounded text-emerald-600 border-slate-300 focus:ring-emerald-500 cursor-pointer disabled:opacity-50"
-                          title={`Tích chọn hồ sơ ${record.soHoSo} để hoàn thành cùng 1 lần`}
-                        />
-                      )}
-                    </td>
+                          <Check className="w-3.5 h-3.5 text-emerald-600 opacity-0 group-hover:opacity-100 transition-opacity" />
+                        </button>
+                      </td>
 
-                    {/* STT */}
-                    <td className={cn(cellPadding, 'text-center text-slate-500 font-mono')}>
-                      {record.stt || idx + 1}
-                    </td>
+                      {/* STT */}
+                      <td className={cn(cellPadding, 'text-center text-slate-500 font-mono')}>
+                        {record.stt || idx + 1}
+                      </td>
 
-                    {/* SỐ HỒ SƠ */}
-                    <td className={cn(cellPadding, 'font-semibold font-mono text-slate-900 whitespace-nowrap')}>
-                      {record.soHoSo || '-'}
-                    </td>
+                      {/* SỐ HỒ SƠ */}
+                      <td className={cn(cellPadding, 'font-semibold font-mono text-slate-900 whitespace-nowrap')}>
+                        {record.soHoSo || '-'}
+                      </td>
 
-                    {/* QUY TRÌNH */}
-                    <td
-                      className={cn(
-                        cellPadding,
-                        'text-slate-800',
-                        isWrapText
-                          ? 'whitespace-normal break-words leading-relaxed max-w-[340px]'
-                          : 'max-w-[240px] truncate'
-                      )}
-                      title={record.quyTrinh}
-                    >
-                      {record.quyTrinh || '-'}
-                    </td>
-
-                    {/* BỘ PHẬN HIỆN TẠI */}
-                    <td
-                      className={cn(
-                        cellPadding,
-                        'text-slate-800 font-medium',
-                        isWrapText
-                          ? 'whitespace-normal break-words leading-relaxed max-w-[260px]'
-                          : 'max-w-[200px] truncate'
-                      )}
-                      title={record.boPhanHienTai}
-                    >
-                      {record.boPhanHienTai || '-'}
-                    </td>
-
-                    {/* MENU HIỆN TẠI */}
-                    <td
-                      className={cn(
-                        cellPadding,
-                        'text-slate-700',
-                        isWrapText
-                          ? 'whitespace-normal break-words leading-relaxed max-w-[260px]'
-                          : 'max-w-[200px] truncate'
-                      )}
-                      title={record.menuHienTai}
-                    >
-                      {record.menuHienTai || '-'}
-                    </td>
-
-                    {/* TÊN ĐƠN VỊ / HỌ TÊN */}
-                    <td
-                      className={cn(
-                        cellPadding,
-                        'text-slate-900 font-medium',
-                        isWrapText
-                          ? 'whitespace-normal break-words leading-relaxed max-w-[320px]'
-                          : 'max-w-[220px] truncate'
-                      )}
-                      title={record.tenDonVi}
-                    >
-                      {record.tenDonVi || '-'}
-                    </td>
-
-                    {/* CƠ QUAN / CÁN BỘ XL */}
-                    <td className={cn(cellPadding, 'text-slate-600')}>
-                      <div
+                      {/* QUY TRÌNH */}
+                      <td
                         className={cn(
-                          'font-medium text-slate-800',
-                          isWrapText ? 'whitespace-normal break-words leading-tight' : 'max-w-[200px] truncate'
+                          cellPadding,
+                          'text-slate-800',
+                          isWrapText
+                            ? 'whitespace-normal break-words leading-relaxed max-w-[340px]'
+                            : 'max-w-[240px] truncate'
                         )}
-                        title={record.coQuanXuLy}
+                        title={record.quyTrinh}
                       >
-                        {record.coQuanXuLy || '-'}
-                      </div>
-                      <div
+                        {record.quyTrinh || '-'}
+                      </td>
+
+                      {/* BỘ PHẬN HIỆN TẠI */}
+                      <td
                         className={cn(
-                          'text-slate-500 mt-0.5',
-                          isWrapText ? 'whitespace-normal break-words leading-tight' : 'max-w-[200px] truncate'
+                          cellPadding,
+                          'text-slate-800 font-medium',
+                          isWrapText
+                            ? 'whitespace-normal break-words leading-relaxed max-w-[260px]'
+                            : 'max-w-[200px] truncate'
                         )}
-                        title={record.canBoXuLy}
+                        title={record.boPhanHienTai}
                       >
-                        {record.canBoXuLy || '-'}
-                      </div>
-                    </td>
+                        {record.boPhanHienTai || '-'}
+                      </td>
 
-                    {/* NGÀY NHẬN */}
-                    <td className={cn(cellPadding, 'text-slate-600 whitespace-nowrap text-center font-mono')}>
-                      {record.ngayNhan || '-'}
-                    </td>
+                      {/* MENU HIỆN TẠI */}
+                      <td
+                        className={cn(
+                          cellPadding,
+                          'text-slate-700',
+                          isWrapText
+                            ? 'whitespace-normal break-words leading-relaxed max-w-[260px]'
+                            : 'max-w-[200px] truncate'
+                        )}
+                        title={record.menuHienTai}
+                      >
+                        {record.menuHienTai || '-'}
+                      </td>
 
-                    {/* HẠN TRẢ */}
-                    <td className={cn(cellPadding, 'text-slate-900 font-semibold whitespace-nowrap text-center font-mono')}>
-                      {record.ngayTra || '-'}
-                    </td>
+                      {/* TÊN ĐƠN VỊ / HỌ TÊN */}
+                      <td
+                        className={cn(
+                          cellPadding,
+                          'text-slate-900 font-medium',
+                          isWrapText
+                            ? 'whitespace-normal break-words leading-relaxed max-w-[320px]'
+                            : 'max-w-[220px] truncate'
+                        )}
+                        title={record.tenDonVi}
+                      >
+                        {record.tenDonVi || '-'}
+                      </td>
 
-                    {/* TRẢ THỰC TẾ */}
-                    <td className={cn(cellPadding, 'whitespace-nowrap text-center font-mono')}>
-                      {record.traThucTe ? (
-                        <span className="text-emerald-700 font-medium">{record.traThucTe}</span>
-                      ) : (
+                      {/* CƠ QUAN / CÁN BỘ XL */}
+                      <td className={cn(cellPadding, 'text-slate-600')}>
+                        <div
+                          className={cn(
+                            'font-medium text-slate-800',
+                            isWrapText ? 'whitespace-normal break-words leading-tight' : 'max-w-[200px] truncate'
+                          )}
+                          title={record.coQuanXuLy}
+                        >
+                          {record.coQuanXuLy || '-'}
+                        </div>
+                        <div
+                          className={cn(
+                            'text-slate-500 mt-0.5',
+                            isWrapText ? 'whitespace-normal break-words leading-tight' : 'max-w-[200px] truncate'
+                          )}
+                          title={record.canBoXuLy}
+                        >
+                          {record.canBoXuLy || '-'}
+                        </div>
+                      </td>
+
+                      {/* NGÀY NHẬN */}
+                      <td className={cn(cellPadding, 'text-slate-600 whitespace-nowrap text-center font-mono')}>
+                        {record.ngayNhan || '-'}
+                      </td>
+
+                      {/* HẠN TRẢ */}
+                      <td className={cn(cellPadding, 'text-slate-900 font-semibold whitespace-nowrap text-center font-mono')}>
+                        {record.ngayTra || '-'}
+                      </td>
+
+                      {/* TRẢ THỰC TẾ */}
+                      <td className={cn(cellPadding, 'whitespace-nowrap text-center font-mono')}>
                         <span className="text-slate-400 italic">Chưa trả</span>
-                      )}
-                    </td>
+                      </td>
 
-                    {/* THỜI GIAN CÒN LẠI */}
-                    <td className={cn(cellPadding, 'whitespace-nowrap')}>
-                      <div
-                        className={cn(
-                          'px-2.5 py-1 rounded-md text-xs font-medium flex items-center gap-1.5 border shadow-2xs',
-                          statusColorClass
-                        )}
-                      >
-                        {record.isCompleted ? (
-                          <>
-                            {record.isOverdue ? (
-                              <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
-                            ) : (
-                              <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0" />
-                            )}
-                            <span className="truncate">
-                              {record.isOverdue
-                                ? `Trễ hạn (${formatTimeRemaining(record.tr!)})`
-                                : 'Đúng hạn'}
-                            </span>
-                          </>
-                        ) : (
-                          <>
-                            <Clock className="w-3.5 h-3.5 flex-shrink-0" />
-                            <span className="truncate">
-                              {record.tr ? formatTimeRemaining(record.tr) : 'Không xác định'}
-                            </span>
-                          </>
-                        )}
-                      </div>
-                    </td>
-
-                    {/* HOÀN THÀNH ĐƠN LẺ */}
-                    <td className={cn(cellPadding, 'text-center')}>
-                      {record.isCompleted ? (
-                        <span
-                          className="inline-flex items-center justify-center text-emerald-600 bg-emerald-100 p-1.5 rounded-full"
-                          title="Đã hoàn thành"
+                      {/* THỜI GIAN CÒN LẠI */}
+                      <td className={cn(cellPadding, 'whitespace-nowrap')}>
+                        <div
+                          className={cn(
+                            'px-2.5 py-1 rounded-md text-xs font-medium flex items-center gap-1.5 border shadow-2xs',
+                            statusColorClass
+                          )}
                         >
-                          <Check className="w-4 h-4" />
-                        </span>
-                      ) : (
+                          <Clock className="w-3.5 h-3.5 flex-shrink-0" />
+                          <span className="truncate">
+                            {record.tr ? formatTimeRemaining(record.tr) : 'Không xác định'}
+                          </span>
+                        </div>
+                      </td>
+
+                      {/* HOÀN THÀNH RIÊNG LẺ: INSTANT ACTION BUTTON */}
+                      <td className={cn(cellPadding, 'text-center')}>
                         <button
                           onClick={() => handleMarkComplete(record)}
                           disabled={isProcessing || isBatchProcessing}
-                          className="inline-flex items-center justify-center p-1.5 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-full transition-colors disabled:opacity-50 cursor-pointer"
-                          title="Đánh dấu hoàn thành riêng hồ sơ này"
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-emerald-50 hover:bg-emerald-600 text-emerald-700 hover:text-white border border-emerald-300 text-xs font-semibold transition-all shadow-2xs cursor-pointer disabled:opacity-50"
+                          title="Bấm để hoàn thành và chuyển ngay hồ sơ này xuống phía dưới"
                         >
                           {isProcessing ? (
-                            <div className="w-4 h-4 rounded-full border-2 border-emerald-500 border-t-transparent animate-spin" />
+                            <div className="w-3.5 h-3.5 rounded-full border-2 border-emerald-500 border-t-transparent animate-spin" />
                           ) : (
-                            <Check className="w-4 h-4" />
+                            <Check className="w-3.5 h-3.5" />
                           )}
+                          <span className="hidden sm:inline">Xong</span>
                         </button>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })
+                      </td>
+                    </tr>
+                  );
+                })}
+
+                {/* SECTION 2: DANH SÁCH HỒ SƠ ĐÃ HOÀN THÀNH (ĐÃ CHUYỂN XUỐNG PHÍA DƯỚI) */}
+                {completedList.length > 0 && (
+                  <>
+                    <tr className="bg-emerald-100 text-emerald-950 font-bold border-y-2 border-emerald-400 select-none">
+                      <td colSpan={13} className="px-4 py-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <CheckCircle2 className="w-5 h-5 text-emerald-700 shrink-0" />
+                            <span className="uppercase text-xs sm:text-sm font-extrabold tracking-wide text-emerald-950">
+                              Danh sách hồ sơ đã hoàn thành ({completedList.length}) — Đã chuyển xuống phía dưới
+                            </span>
+                          </div>
+                          <div className="text-xs font-semibold text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-md border border-emerald-300">
+                            Hiển thị theo thời gian hoàn thành gần nhất
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+
+                    {completedList.map((record, idx) => {
+                      return (
+                        <tr
+                          key={record.rowIndex}
+                          className="bg-emerald-50/30 hover:bg-emerald-50/60 transition-colors text-slate-600"
+                        >
+                          {/* Checkbox column: Shows green checkmark, clicking allows undo */}
+                          <td className={cn(cellPadding, 'text-center')}>
+                            <button
+                              type="button"
+                              onClick={() => handleUndoComplete(record)}
+                              className="w-5 h-5 rounded bg-emerald-600 text-white inline-flex items-center justify-center hover:bg-emerald-700 transition-colors cursor-pointer"
+                              title="Hồ sơ đã hoàn thành. Bấm vào đây để Hoàn tác (chuyển lại lên trên)"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                            </button>
+                          </td>
+
+                          {/* STT */}
+                          <td className={cn(cellPadding, 'text-center text-slate-400 font-mono')}>
+                            {record.stt || idx + 1}
+                          </td>
+
+                          {/* SỐ HỒ SƠ */}
+                          <td className={cn(cellPadding, 'font-semibold font-mono text-emerald-900 whitespace-nowrap')}>
+                            {record.soHoSo || '-'}
+                          </td>
+
+                          {/* QUY TRÌNH */}
+                          <td
+                            className={cn(
+                              cellPadding,
+                              isWrapText
+                                ? 'whitespace-normal break-words leading-relaxed max-w-[340px]'
+                                : 'max-w-[240px] truncate'
+                            )}
+                            title={record.quyTrinh}
+                          >
+                            {record.quyTrinh || '-'}
+                          </td>
+
+                          {/* BỘ PHẬN HIỆN TẠI */}
+                          <td
+                            className={cn(
+                              cellPadding,
+                              'font-medium text-slate-700',
+                              isWrapText
+                                ? 'whitespace-normal break-words leading-relaxed max-w-[260px]'
+                                : 'max-w-[200px] truncate'
+                            )}
+                            title={record.boPhanHienTai}
+                          >
+                            {record.boPhanHienTai || '-'}
+                          </td>
+
+                          {/* MENU HIỆN TẠI */}
+                          <td
+                            className={cn(
+                              cellPadding,
+                              isWrapText
+                                ? 'whitespace-normal break-words leading-relaxed max-w-[260px]'
+                                : 'max-w-[200px] truncate'
+                            )}
+                            title={record.menuHienTai}
+                          >
+                            {record.menuHienTai || '-'}
+                          </td>
+
+                          {/* TÊN ĐƠN VỊ / HỌ TÊN */}
+                          <td
+                            className={cn(
+                              cellPadding,
+                              'font-medium text-slate-800',
+                              isWrapText
+                                ? 'whitespace-normal break-words leading-relaxed max-w-[320px]'
+                                : 'max-w-[220px] truncate'
+                            )}
+                            title={record.tenDonVi}
+                          >
+                            {record.tenDonVi || '-'}
+                          </td>
+
+                          {/* CƠ QUAN / CÁN BỘ XL */}
+                          <td className={cn(cellPadding, 'text-slate-500')}>
+                            <div
+                              className={cn(
+                                'font-medium',
+                                isWrapText ? 'whitespace-normal break-words leading-tight' : 'max-w-[200px] truncate'
+                              )}
+                              title={record.coQuanXuLy}
+                            >
+                              {record.coQuanXuLy || '-'}
+                            </div>
+                            <div
+                              className={cn(
+                                'text-slate-400 mt-0.5',
+                                isWrapText ? 'whitespace-normal break-words leading-tight' : 'max-w-[200px] truncate'
+                              )}
+                              title={record.canBoXuLy}
+                            >
+                              {record.canBoXuLy || '-'}
+                            </div>
+                          </td>
+
+                          {/* NGÀY NHẬN */}
+                          <td className={cn(cellPadding, 'text-slate-500 whitespace-nowrap text-center font-mono')}>
+                            {record.ngayNhan || '-'}
+                          </td>
+
+                          {/* HẠN TRẢ */}
+                          <td className={cn(cellPadding, 'text-slate-600 font-semibold whitespace-nowrap text-center font-mono')}>
+                            {record.ngayTra || '-'}
+                          </td>
+
+                          {/* TRẢ THỰC TẾ: Hiển thị nổi bật ngày giờ trả kết quả */}
+                          <td className={cn(cellPadding, 'whitespace-nowrap text-center font-mono')}>
+                            <span className="inline-flex items-center gap-1 text-emerald-800 font-bold bg-emerald-100/90 px-2 py-0.5 rounded border border-emerald-300">
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-700" />
+                              {record.traThucTe}
+                            </span>
+                          </td>
+
+                          {/* THỜI GIAN CÒN LẠI: Trạng thái Đúng hạn / Trễ hạn */}
+                          <td className={cn(cellPadding, 'whitespace-nowrap')}>
+                            <div
+                              className={cn(
+                                'px-2.5 py-1 rounded-md text-xs font-semibold flex items-center gap-1.5 border shadow-2xs',
+                                record.isOverdue
+                                  ? 'bg-amber-50 text-amber-800 border-amber-300'
+                                  : 'bg-emerald-100 text-emerald-900 border-emerald-300'
+                              )}
+                            >
+                              {record.isOverdue ? (
+                                <>
+                                  <AlertTriangle className="w-3.5 h-3.5 text-amber-700 flex-shrink-0" />
+                                  <span>Trễ hạn ({formatTimeRemaining(record.tr!)})</span>
+                                </>
+                              ) : (
+                                <>
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-700 flex-shrink-0" />
+                                  <span>Đúng hạn</span>
+                                </>
+                              )}
+                            </div>
+                          </td>
+
+                          {/* Nút Hoàn tác (Undo) */}
+                          <td className={cn(cellPadding, 'text-center')}>
+                            <button
+                              onClick={() => handleUndoComplete(record)}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-white hover:bg-slate-100 text-slate-600 hover:text-slate-900 border border-slate-300 text-xs font-medium transition-colors shadow-2xs cursor-pointer"
+                              title="Bấm để hoàn tác lại hồ sơ này về danh sách Đang xử lý"
+                            >
+                              <Undo2 className="w-3 h-3 text-slate-500" />
+                              <span>Hoàn tác</span>
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </>
+                )}
+              </>
             )}
           </tbody>
         </table>

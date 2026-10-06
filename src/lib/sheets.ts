@@ -187,6 +187,19 @@ export function saveCompletedOverride(rowIndex: number, soHoSo: string, timestam
   }
 }
 
+export function removeCompletedOverride(rowIndex: number, soHoSo: string) {
+  try {
+    const overrides = getCompletedOverrides();
+    delete overrides[String(rowIndex)];
+    if (soHoSo && soHoSo.trim()) {
+      delete overrides[`shs_${soHoSo.trim()}`];
+    }
+    localStorage.setItem(COMPLETED_STORAGE_KEY, JSON.stringify(overrides));
+  } catch (e) {
+    console.warn('removeCompletedOverride error:', e);
+  }
+}
+
 export function saveCompletedOverridesBatch(
   records: { rowIndex: number; soHoSo: string }[],
   timestampStr: string
@@ -205,36 +218,154 @@ export function saveCompletedOverridesBatch(
   }
 }
 
+// Parse Google Sheet GViz JSON output if user provided a Google Spreadsheet link
+function parseGvizResponse(rawText: string): { records: SheetRecord[]; sheetName: string } {
+  const match = rawText.match(/google\.visualization\.Query\.setResponse\(([\s\S]*)\);?/);
+  const jsonStr = match ? match[1] : rawText;
+  const json = JSON.parse(jsonStr);
+
+  const cols = json.table?.cols || [];
+  const rows = json.table?.rows || [];
+
+  const headerMap: Record<string, number> = {};
+  cols.forEach((col: any, idx: number) => {
+    const label = cleanKey(col.label || col.id || '');
+    if (label) headerMap[label] = idx;
+  });
+
+  const raw2D: any[][] = [];
+  rows.forEach((r: any) => {
+    const rowVals = (r.c || []).map((cell: any) => (cell ? cell.f || (cell.v != null ? String(cell.v) : '') : ''));
+    raw2D.push(rowVals);
+  });
+
+  const overrides = getCompletedOverrides();
+  const records = raw2D.map((item, idx) => {
+    const rec = normalizeRecord(item, idx, headerMap);
+    if (!rec.traThucTe || rec.traThucTe.trim() === '') {
+      const localTimestamp =
+        overrides[String(rec.rowIndex)] ||
+        (rec.soHoSo ? overrides[`shs_${rec.soHoSo.trim()}`] : undefined);
+      if (localTimestamp) {
+        rec.traThucTe = localTimestamp;
+      }
+    }
+    return rec;
+  });
+
+  return { records, sheetName: 'Google Spreadsheet' };
+}
+
 export async function fetchSheetData(
   webAppUrl: string
 ): Promise<{ records: SheetRecord[]; sheetName: string; error?: string }> {
   try {
-    if (!webAppUrl) {
-      throw new Error("Vui lòng nhập Web App URL của Apps Script");
+    if (!webAppUrl || !webAppUrl.trim()) {
+      throw new Error('Vui lòng nhập Web App URL của Apps Script hoặc liên kết Google Sheets');
     }
 
-    // Append cache-buster to prevent browser from returning stale GET cache
-    const separator = webAppUrl.includes('?') ? '&' : '?';
-    const fetchUrl = `${webAppUrl}${separator}_t=${Date.now()}`;
+    const cleanUrl = webAppUrl.trim().replace(/^["']|["']$/g, '');
 
-    const res = await fetch(fetchUrl, {
-      cache: 'no-store',
-      headers: {
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
-        Pragma: 'no-cache',
-      },
-    });
-    
-    if (!res.ok) {
-      throw new Error('Không thể kết nối đến Web App. Vui lòng kiểm tra lại URL.');
-    }
-    
-    const data = await res.json();
-    
-    if (data.status === 'error') {
-      throw new Error(data.message || 'Lỗi từ Apps Script');
+    // Case 1: User pasted a Google Spreadsheet link instead of Apps Script Web App URL
+    if (cleanUrl.includes('docs.google.com/spreadsheets/d/')) {
+      const idMatch = cleanUrl.match(/docs\.google\.com\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+      if (idMatch && idMatch[1]) {
+        const sheetId = idMatch[1];
+        const gvizUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:json`;
+        try {
+          const res = await fetch(gvizUrl);
+          if (res.ok) {
+            const txt = await res.text();
+            return parseGvizResponse(txt);
+          }
+        } catch {
+          // Try through proxy
+          const proxyUrl = `/api/proxy?url=${encodeURIComponent(gvizUrl)}`;
+          const pRes = await fetch(proxyUrl);
+          if (pRes.ok) {
+            const txt = await pRes.text();
+            return parseGvizResponse(txt);
+          }
+        }
+      }
     }
 
+    // Case 2: Standard Google Apps Script Web App URL
+    const separator = cleanUrl.includes('?') ? '&' : '?';
+    const fetchUrl = `${cleanUrl}${separator}_t=${Date.now()}`;
+
+    let responseText: string | null = null;
+    let fetchError: string | null = null;
+
+    // 1. Direct browser fetch without custom headers to avoid CORS preflight rejection
+    try {
+      const res = await fetch(fetchUrl, {
+        method: 'GET',
+        redirect: 'follow',
+      });
+      if (res.ok) {
+        responseText = await res.text();
+      } else {
+        fetchError = `Máy chủ Web App phản hồi lỗi HTTP ${res.status} (${res.statusText})`;
+      }
+    } catch (err: any) {
+      fetchError = err?.message || 'Không thể kết nối đến Web App URL';
+    }
+
+    // 2. If direct fetch failed (CORS or network policy), fallback to local backend proxy
+    if (!responseText) {
+      try {
+        const proxyUrl = `/api/proxy?url=${encodeURIComponent(fetchUrl)}`;
+        const pRes = await fetch(proxyUrl);
+        if (pRes.ok) {
+          responseText = await pRes.text();
+          fetchError = null;
+        } else {
+          const pTxt = await pRes.text();
+          try {
+            const pErr = JSON.parse(pTxt);
+            if (pErr.error) fetchError = pErr.error;
+          } catch {
+            // ignore
+          }
+        }
+      } catch {
+        // keep fetchError
+      }
+    }
+
+    if (!responseText) {
+      throw new Error(fetchError || 'Không thể tải dữ liệu từ Web App. Vui lòng kiểm tra lại URL.');
+    }
+
+    // 3. Inspect if response is HTML error page (common with Google login / permissions issue)
+    const trimmedText = responseText.trim();
+    if (trimmedText.startsWith('<!DOCTYPE html>') || trimmedText.startsWith('<html') || trimmedText.includes('accounts.google.com')) {
+      throw new Error(
+        'Web App yêu cầu đăng nhập tài khoản Google. Vui lòng kiểm tra lại thiết lập xuất bản (Deploy) trong Apps Script: ' +
+        'Vào Tiện ích mở rộng ➔ Apps Script ➔ Triển khai (Deploy) ➔ Quản lý bản triển khai ➔ Thiết lập "Người có quyền truy cập" (Who has access) là "Bất kỳ ai" (Anyone).'
+      );
+    }
+
+    // 4. Parse JSON
+    let data: any;
+    try {
+      data = JSON.parse(trimmedText);
+    } catch {
+      // Check if wrapped in callback
+      const callbackMatch = trimmedText.match(/^[a-zA-Z0-9_]+\(([\s\S]*)\);?$/);
+      if (callbackMatch) {
+        data = JSON.parse(callbackMatch[1]);
+      } else {
+        throw new Error('Dữ liệu trả về từ Web App không đúng định dạng JSON.');
+      }
+    }
+
+    if (data && data.status === 'error') {
+      throw new Error(data.message || 'Lỗi xử lý từ Google Apps Script.');
+    }
+
+    // 5. Extract rows list
     let rawList: any[] = [];
     if (Array.isArray(data)) {
       rawList = data;
@@ -244,16 +375,29 @@ export async function fetchSheetData(
       rawList = data.records;
     } else if (Array.isArray(data.rows)) {
       rawList = data.rows;
+    } else if (Array.isArray(data.values)) {
+      rawList = data.values;
+    } else if (Array.isArray(data.result)) {
+      rawList = data.result;
+    } else if (Array.isArray(data.items)) {
+      rawList = data.items;
+    } else if (data && typeof data === 'object') {
+      for (const k of Object.keys(data)) {
+        if (Array.isArray(data[k])) {
+          rawList = data[k];
+          break;
+        }
+      }
     }
 
-    // Check if rawList has a header row (for 2D array from sheet.getDataRange().getValues())
+    // 6. Header mapping for 2D array matrix
     let headerMap: Record<string, number> | undefined;
     let dataRows = rawList;
 
     if (rawList.length > 0 && Array.isArray(rawList[0])) {
       const firstRowKeys = rawList[0].map((cell: any) => cleanKey(String(cell)));
       const isHeaderRow = firstRowKeys.some((k: string) =>
-        ['stt', 'sohoso', 'mahoso', 'quytrinh', 'bophan', 'menu', 'hantra', 'ngaynhan'].some(
+        ['stt', 'sohoso', 'mahoso', 'quytrinh', 'bophan', 'menu', 'hantra', 'ngaynhan', 'tendonvi', 'canbo', 'coquan'].some(
           (term) => k.includes(term)
         )
       );
@@ -271,7 +415,10 @@ export async function fetchSheetData(
 
     const records: SheetRecord[] = dataRows.map((item, idx) => {
       const rec = normalizeRecord(item, idx, headerMap);
-      // If sheet doesn't yet reflect completion, but we marked it complete locally:
+      // Ensure rowIndex is a valid number
+      rec.rowIndex = Number(rec.rowIndex) || (idx + 2);
+
+      // If sheet doesn't yet reflect completion, check local overrides
       if (!rec.traThucTe || rec.traThucTe.trim() === '') {
         const localTimestamp =
           overrides[String(rec.rowIndex)] ||
@@ -286,7 +433,7 @@ export async function fetchSheetData(
     return { records, sheetName: data.sheetName || 'Sheet dữ liệu' };
   } catch (error: any) {
     console.error('fetchSheetData error:', error);
-    return { records: [], sheetName: '', error: error.message };
+    return { records: [], sheetName: '', error: error.message || 'Lỗi khi tải dữ liệu' };
   }
 }
 

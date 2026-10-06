@@ -4,6 +4,7 @@ import {
   SheetRecord,
   WEB_APP_URL_DEFAULT,
   saveCompletedOverride,
+  removeCompletedOverride,
   saveCompletedOverridesBatch,
 } from './lib/sheets';
 import { RecordTable } from './components/RecordTable';
@@ -50,8 +51,8 @@ export default function App() {
   }, []);
 
   const loadData = async (url: string = webAppUrl) => {
-    if (!url) {
-      setError('Vui lòng nhập Web App URL của Apps Script');
+    if (!url || !url.trim()) {
+      setError('Vui lòng nhập Web App URL của Apps Script hoặc liên kết Google Sheets');
       return;
     }
 
@@ -77,12 +78,15 @@ export default function App() {
     loadData();
   };
 
-  const handleUpdateRecordCompleted = (rowIndex: number, timestampStr: string) => {
-    let targetSoHoSo = '';
+  const handleUpdateRecordCompleted = (rowIndex: number, timestampStr: string, soHoSo?: string) => {
+    let targetSoHoSo = soHoSo || '';
     setRecords((prev) =>
       prev.map((r) => {
-        if (r.rowIndex === rowIndex) {
-          targetSoHoSo = r.soHoSo;
+        const isMatch =
+          Number(r.rowIndex) === Number(rowIndex) ||
+          (soHoSo && r.soHoSo && r.soHoSo.trim() === soHoSo.trim());
+        if (isMatch) {
+          if (!targetSoHoSo && r.soHoSo) targetSoHoSo = r.soHoSo;
           return {
             ...r,
             traThucTe: timestampStr,
@@ -94,12 +98,32 @@ export default function App() {
     saveCompletedOverride(rowIndex, targetSoHoSo, timestampStr);
   };
 
+  const handleUndoRecordCompleted = (rowIndex: number, soHoSo?: string) => {
+    let targetSoHoSo = soHoSo || '';
+    setRecords((prev) =>
+      prev.map((r) => {
+        const isMatch =
+          Number(r.rowIndex) === Number(rowIndex) ||
+          (soHoSo && r.soHoSo && r.soHoSo.trim() === soHoSo.trim());
+        if (isMatch) {
+          if (!targetSoHoSo && r.soHoSo) targetSoHoSo = r.soHoSo;
+          return {
+            ...r,
+            traThucTe: '',
+          };
+        }
+        return r;
+      })
+    );
+    removeCompletedOverride(rowIndex, targetSoHoSo);
+  };
+
   const handleUpdateMultipleRecordsCompleted = (rowIndices: number[], timestampStr: string) => {
-    const rowSet = new Set(rowIndices);
+    const rowSet = new Set(rowIndices.map((i) => Number(i)));
     const affected: { rowIndex: number; soHoSo: string }[] = [];
     setRecords((prev) =>
       prev.map((r) => {
-        if (rowSet.has(r.rowIndex)) {
+        if (rowSet.has(Number(r.rowIndex))) {
           affected.push({ rowIndex: r.rowIndex, soHoSo: r.soHoSo });
           return {
             ...r,
@@ -346,6 +370,7 @@ export default function App() {
                 webAppUrl={webAppUrl}
                 onRefresh={handleRefresh}
                 onUpdateRecord={handleUpdateRecordCompleted}
+                onUndoRecord={handleUndoRecordCompleted}
                 onUpdateMultipleRecords={handleUpdateMultipleRecordsCompleted}
               />
             </div>

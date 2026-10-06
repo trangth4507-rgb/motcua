@@ -12,11 +12,20 @@ const DATE_FORMATS = [
   'd/M/yyyy',
 ];
 
-export function parseDate(dateStr: string): Date | null {
-  if (!dateStr) return null;
+export function parseDate(dateStr: string | number | null | undefined): Date | null {
+  if (dateStr == null) return null;
   const cleanStr = String(dateStr).trim();
-  if (!cleanStr) return null;
+  if (!cleanStr || cleanStr === '-' || cleanStr.toLowerCase() === 'null') return null;
 
+  // 1. Check if numeric serial date from Excel / Google Sheets
+  const numVal = Number(cleanStr);
+  if (!isNaN(numVal) && numVal > 30000 && numVal < 80000) {
+    // Serial number representation (days since 1899-12-30)
+    const date = new Date(Math.round((numVal - 25569) * 86400 * 1000));
+    if (!isNaN(date.getTime())) return date;
+  }
+
+  // 2. Try known Vietnamese & standard formats
   for (const fmt of DATE_FORMATS) {
     try {
       const parsed = parse(cleanStr, fmt, new Date());
@@ -26,7 +35,7 @@ export function parseDate(dateStr: string): Date | null {
     }
   }
 
-  // Fallback to native Date
+  // 3. Fallback to native Date (handles ISO 8601, RFC 2822)
   try {
     const fallback = new Date(cleanStr);
     if (!isNaN(fallback.getTime())) return fallback;
