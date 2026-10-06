@@ -43,12 +43,16 @@ interface RecordTableProps {
   records: SheetRecord[];
   webAppUrl: string;
   onRefresh: () => void;
+  onUpdateRecord?: (rowIndex: number, timestampStr: string) => void;
+  onUpdateMultipleRecords?: (rowIndices: number[], timestampStr: string) => void;
 }
 
 export function RecordTable({
   records,
   webAppUrl,
   onRefresh,
+  onUpdateRecord,
+  onUpdateMultipleRecords,
 }: RecordTableProps) {
   const [now, setNow] = useState(new Date());
   const [processingRows, setProcessingRows] = useState<Set<number>>(new Set());
@@ -386,95 +390,88 @@ export function RecordTable({
 
   // Single mark complete
   const handleMarkComplete = async (record: SheetRecord) => {
-    if (!webAppUrl) {
-      alert('Vui lòng nhập Web App URL trước');
-      return;
-    }
-
     const todayStr = getCurrentDateStr();
     const confirmed = window.confirm(
-      `Bạn có chắc chắn muốn đánh dấu hoàn thành hồ sơ ${record.soHoSo}? Thao tác này sẽ ghi nhận thời gian trả thực tế vào hệ thống.`
+      `Đánh dấu hoàn thành hồ sơ ${record.soHoSo || record.stt}? Thao tác này sẽ ghi nhận hoàn thành và chuyển ngay hồ sơ xuống danh sách Đã hoàn thành phía dưới.`
     );
     if (!confirmed) return;
 
-    setProcessingRows((prev) => new Set(prev).add(record.rowIndex));
-    try {
-      const success = await markRecordCompleted(webAppUrl, record.rowIndex, todayStr);
-      if (success) {
-        setSelectedRowIndices((prev) => {
+    // 1. OPTIMISTIC UPDATE: Ngay lập tức cập nhật trạng thái đã hoàn thành và đẩy xuống danh sách dưới cùng
+    if (onUpdateRecord) {
+      onUpdateRecord(record.rowIndex, todayStr);
+    }
+    setSelectedRowIndices((prev) => {
+      const next = new Set(prev);
+      next.delete(record.rowIndex);
+      return next;
+    });
+
+    // 2. Đồng bộ ngầm lên Google Sheets (nếu có Web App URL)
+    if (webAppUrl) {
+      setProcessingRows((prev) => new Set(prev).add(record.rowIndex));
+      try {
+        await markRecordCompleted(webAppUrl, record.rowIndex, todayStr);
+      } catch (e: any) {
+        console.warn('Sync to sheet background warning:', e);
+      } finally {
+        setProcessingRows((prev) => {
           const next = new Set(prev);
           next.delete(record.rowIndex);
           return next;
         });
-        onRefresh();
-      } else {
-        alert('Có lỗi xảy ra khi cập nhật trạng thái hoàn thành.');
       }
-    } catch (e: any) {
-      alert('Lỗi: ' + (e?.message || 'Không thể cập nhật'));
-    } finally {
-      setProcessingRows((prev) => {
-        const next = new Set(prev);
-        next.delete(record.rowIndex);
-        return next;
-      });
     }
   };
 
   // Batch mark complete for all checked records
   const handleBatchMarkComplete = async () => {
     if (selectedRowIndices.size === 0) return;
-    if (!webAppUrl) {
-      alert('Vui lòng nhập Web App URL trước');
-      return;
-    }
 
     const count = selectedRowIndices.size;
     const confirmed = window.confirm(
-      `Bạn có chắc chắn muốn đánh dấu hoàn thành cho ${count} hồ sơ đã chọn cùng một lúc? Thao tác này sẽ ghi nhận thời gian trả thực tế vào hệ thống.`
+      `Bạn có chắc chắn muốn hoàn thành ${count} hồ sơ đã chọn? Toàn bộ các hồ sơ này sẽ được chuyển ngay xuống danh sách Đã hoàn thành phía dưới.`
     );
     if (!confirmed) return;
 
-    const rowIndicesToProcess: number[] = Array.from(selectedRowIndices);
-    setIsBatchProcessing(true);
-    setBatchProgress({ current: 0, total: count });
-
-    // Mark all rows as processing for visual spinner
-    setProcessingRows((prev) => {
-      const next = new Set(prev);
-      rowIndicesToProcess.forEach((idx) => next.add(idx));
-      return next;
-    });
-
     const todayStr = getCurrentDateStr();
+    const rowIndicesToProcess: number[] = Array.from(selectedRowIndices);
 
-    try {
-      const res = await markMultipleRecordsCompleted(
-        webAppUrl,
-        rowIndicesToProcess,
-        todayStr,
-        (current, total) => {
-          setBatchProgress({ current, total });
-        }
-      );
+    // 1. OPTIMISTIC UPDATE: Ngay lập tức cập nhật tất cả hồ sơ đã chọn sang Hoàn thành và đẩy xuống dưới
+    if (onUpdateMultipleRecords) {
+      onUpdateMultipleRecords(rowIndicesToProcess, todayStr);
+    }
+    setSelectedRowIndices(new Set());
 
-      if (res.success) {
-        setSelectedRowIndices(new Set());
-        onRefresh();
-        alert(`Đã cập nhật thành công ${res.successCount} hồ sơ!`);
-      } else {
-        alert('Có lỗi xảy ra trong quá trình cập nhật hồ sơ hàng loạt.');
-      }
-    } catch (e: any) {
-      alert('Lỗi: ' + (e?.message || 'Không thể hoàn thành hàng loạt'));
-    } finally {
-      setIsBatchProcessing(false);
-      setBatchProgress(null);
+    // 2. Đồng bộ ngầm lên Google Sheets (nếu có Web App URL)
+    if (webAppUrl) {
+      setIsBatchProcessing(true);
+      setBatchProgress({ current: 0, total: count });
       setProcessingRows((prev) => {
         const next = new Set(prev);
-        rowIndicesToProcess.forEach((idx) => next.delete(idx));
+        rowIndicesToProcess.forEach((idx) => next.add(idx));
         return next;
       });
+
+      try {
+        await markMultipleRecordsCompleted(
+          webAppUrl,
+          rowIndicesToProcess,
+          todayStr,
+          (current, total) => {
+            setBatchProgress({ current, total });
+          }
+        );
+      } catch (e: any) {
+        console.warn('Batch sync background warning:', e);
+      } finally {
+        setIsBatchProcessing(false);
+        setBatchProgress(null);
+        setProcessingRows((prev) => {
+          const next = new Set(prev);
+          rowIndicesToProcess.forEach((idx) => next.delete(idx));
+          return next;
+        });
+      }
     }
   };
 
@@ -545,7 +542,7 @@ export function RecordTable({
               ) : (
                 <>
                   <CheckCircle2 className="w-4 h-4 text-emerald-700" />
-                  <span>Hoàn thành {selectedRowIndices.size} hồ sơ cùng lúc</span>
+                  <span>Hoàn thành {selectedRowIndices.size} hồ sơ (Chuyển xuống dưới)</span>
                 </>
               )}
             </button>

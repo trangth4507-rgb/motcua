@@ -1,5 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { fetchSheetData, SheetRecord, WEB_APP_URL_DEFAULT } from './lib/sheets';
+import {
+  fetchSheetData,
+  SheetRecord,
+  WEB_APP_URL_DEFAULT,
+  saveCompletedOverride,
+  saveCompletedOverridesBatch,
+} from './lib/sheets';
 import { RecordTable } from './components/RecordTable';
 import {
   FileSpreadsheet,
@@ -69,6 +75,41 @@ export default function App() {
 
   const handleRefresh = () => {
     loadData();
+  };
+
+  const handleUpdateRecordCompleted = (rowIndex: number, timestampStr: string) => {
+    let targetSoHoSo = '';
+    setRecords((prev) =>
+      prev.map((r) => {
+        if (r.rowIndex === rowIndex) {
+          targetSoHoSo = r.soHoSo;
+          return {
+            ...r,
+            traThucTe: timestampStr,
+          };
+        }
+        return r;
+      })
+    );
+    saveCompletedOverride(rowIndex, targetSoHoSo, timestampStr);
+  };
+
+  const handleUpdateMultipleRecordsCompleted = (rowIndices: number[], timestampStr: string) => {
+    const rowSet = new Set(rowIndices);
+    const affected: { rowIndex: number; soHoSo: string }[] = [];
+    setRecords((prev) =>
+      prev.map((r) => {
+        if (rowSet.has(r.rowIndex)) {
+          affected.push({ rowIndex: r.rowIndex, soHoSo: r.soHoSo });
+          return {
+            ...r,
+            traThucTe: timestampStr,
+          };
+        }
+        return r;
+      })
+    );
+    saveCompletedOverridesBatch(affected, timestampStr);
   };
 
   // Quick stats
@@ -304,6 +345,8 @@ export default function App() {
                 records={records}
                 webAppUrl={webAppUrl}
                 onRefresh={handleRefresh}
+                onUpdateRecord={handleUpdateRecordCompleted}
+                onUpdateMultipleRecords={handleUpdateMultipleRecordsCompleted}
               />
             </div>
           )}

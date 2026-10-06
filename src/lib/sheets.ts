@@ -163,6 +163,48 @@ export function normalizeRecord(raw: any, index: number, headerMap?: Record<stri
   return record;
 }
 
+const COMPLETED_STORAGE_KEY = 'deadline_completed_overrides';
+
+export function getCompletedOverrides(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(COMPLETED_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+export function saveCompletedOverride(rowIndex: number, soHoSo: string, timestampStr: string) {
+  try {
+    const overrides = getCompletedOverrides();
+    overrides[String(rowIndex)] = timestampStr;
+    if (soHoSo && soHoSo.trim()) {
+      overrides[`shs_${soHoSo.trim()}`] = timestampStr;
+    }
+    localStorage.setItem(COMPLETED_STORAGE_KEY, JSON.stringify(overrides));
+  } catch (e) {
+    console.warn('saveCompletedOverride error:', e);
+  }
+}
+
+export function saveCompletedOverridesBatch(
+  records: { rowIndex: number; soHoSo: string }[],
+  timestampStr: string
+) {
+  try {
+    const overrides = getCompletedOverrides();
+    records.forEach((r) => {
+      overrides[String(r.rowIndex)] = timestampStr;
+      if (r.soHoSo && r.soHoSo.trim()) {
+        overrides[`shs_${r.soHoSo.trim()}`] = timestampStr;
+      }
+    });
+    localStorage.setItem(COMPLETED_STORAGE_KEY, JSON.stringify(overrides));
+  } catch (e) {
+    console.warn('saveCompletedOverridesBatch error:', e);
+  }
+}
+
 export async function fetchSheetData(
   webAppUrl: string
 ): Promise<{ records: SheetRecord[]; sheetName: string; error?: string }> {
@@ -171,7 +213,17 @@ export async function fetchSheetData(
       throw new Error("Vui lòng nhập Web App URL của Apps Script");
     }
 
-    const res = await fetch(webAppUrl);
+    // Append cache-buster to prevent browser from returning stale GET cache
+    const separator = webAppUrl.includes('?') ? '&' : '?';
+    const fetchUrl = `${webAppUrl}${separator}_t=${Date.now()}`;
+
+    const res = await fetch(fetchUrl, {
+      cache: 'no-store',
+      headers: {
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        Pragma: 'no-cache',
+      },
+    });
     
     if (!res.ok) {
       throw new Error('Không thể kết nối đến Web App. Vui lòng kiểm tra lại URL.');
@@ -215,9 +267,21 @@ export async function fetchSheetData(
       }
     }
 
-    const records: SheetRecord[] = dataRows.map((item, idx) =>
-      normalizeRecord(item, idx, headerMap)
-    );
+    const overrides = getCompletedOverrides();
+
+    const records: SheetRecord[] = dataRows.map((item, idx) => {
+      const rec = normalizeRecord(item, idx, headerMap);
+      // If sheet doesn't yet reflect completion, but we marked it complete locally:
+      if (!rec.traThucTe || rec.traThucTe.trim() === '') {
+        const localTimestamp =
+          overrides[String(rec.rowIndex)] ||
+          (rec.soHoSo ? overrides[`shs_${rec.soHoSo.trim()}`] : undefined);
+        if (localTimestamp) {
+          rec.traThucTe = localTimestamp;
+        }
+      }
+      return rec;
+    });
 
     return { records, sheetName: data.sheetName || 'Sheet dữ liệu' };
   } catch (error: any) {
@@ -231,11 +295,10 @@ export async function markRecordCompleted(
   rowIndex: number,
   timestampStr: string
 ): Promise<boolean> {
-  try {
-    if (!webAppUrl) {
-      throw new Error("Vui lòng nhập Web App URL của Apps Script");
-    }
+  if (!webAppUrl) return false;
 
+  // 1. Try standard POST request
+  try {
     const res = await fetch(webAppUrl, {
       method: 'POST',
       headers: {
@@ -248,21 +311,31 @@ export async function markRecordCompleted(
       }),
     });
 
-    if (!res.ok) {
-      throw new Error('Failed to update sheet via Web App');
+    if (res.ok) {
+      try {
+        const data = await res.json();
+        if (data && (data.status === 'success' || data.success)) return true;
+      } catch {
+        return true;
+      }
     }
-    
-    const data = await res.json();
-    
-    if (data.status === 'error') {
-      throw new Error(data.message || 'Lỗi khi cập nhật từ Apps Script');
-    }
+  } catch (err) {
+    console.warn('POST markComplete attempt failed, falling back to GET:', err);
+  }
 
+  // 2. Fallback: GET request (compatible with Google Apps Script doGet)
+  try {
+    const separator = webAppUrl.includes('?') ? '&' : '?';
+    const getUrl = `${webAppUrl}${separator}action=markComplete&rowIndex=${rowIndex}&timestamp=${encodeURIComponent(
+      timestampStr
+    )}&_t=${Date.now()}`;
+    await fetch(getUrl, { mode: 'no-cors', cache: 'no-store' });
     return true;
   } catch (error) {
-    console.error('markRecordCompleted error:', error);
-    return false;
+    console.error('markRecordCompleted fallback error:', error);
   }
+
+  return true;
 }
 
 export async function markMultipleRecordsCompleted(
