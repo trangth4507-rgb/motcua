@@ -8,6 +8,7 @@ import {
   saveCompletedOverridesBatch,
   clearAllCompletedOverrides,
   getDemoRecords,
+  APPS_SCRIPT_TEMPLATE,
 } from './lib/sheets';
 import { RecordTable } from './components/RecordTable';
 import {
@@ -44,7 +45,6 @@ export default function App() {
   const [isAutoRefreshing, setIsAutoRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showGuideModal, setShowGuideModal] = useState(false);
-  const [guideTab, setGuideTab] = useState<'direct' | 'script'>('direct');
   const [hasCopiedCode, setHasCopiedCode] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
@@ -75,7 +75,7 @@ export default function App() {
 
   const loadData = async (url: string = webAppUrl, silent: boolean = false) => {
     if (!url || !url.trim()) {
-      if (!silent) setError('Vui lòng nhập Web App URL của Apps Script hoặc liên kết Google Sheets');
+      if (!silent) setError('Vui lòng nhập Web App URL của Google Apps Script (kết thúc bằng /exec)');
       return;
     }
 
@@ -90,13 +90,7 @@ export default function App() {
       const { records: data, sheetName: sName, error: err } = await fetchSheetData(url);
       if (err) {
         setAutoRefreshEnabled(false);
-        const is404 = err.includes('404') || err.includes('does not exist');
-        if (is404) {
-          // Xóa ngay URL chết khỏi bộ nhớ để người dùng không bị kẹt lặp lại lỗi
-          localStorage.removeItem('deadline_webapp_url');
-          localStorage.removeItem('deadline_master_webapp_url');
-          setWebAppUrl('');
-        }
+        // Giữ nguyên webAppUrl trong ô nhập để người dùng không bị mất link và dễ chỉnh sửa
         if (!silent || records.length === 0) {
           setError(err);
         }
@@ -107,7 +101,7 @@ export default function App() {
         }
       } else {
         localStorage.setItem('deadline_webapp_url', url);
-        // Replace previous records completely with latest fresh data from Google Sheet!
+        // Cập nhật toàn bộ danh sách mới nhất vừa lấy từ Google Sheet
         setRecords(data);
         setSheetName(sName);
         setLastUpdated(new Date());
@@ -116,12 +110,6 @@ export default function App() {
     } catch (err: any) {
       setAutoRefreshEnabled(false);
       const msg = err.message || 'Lỗi tải dữ liệu';
-      const is404 = msg.includes('404') || msg.includes('does not exist');
-      if (is404) {
-        localStorage.removeItem('deadline_webapp_url');
-        localStorage.removeItem('deadline_master_webapp_url');
-        setWebAppUrl('');
-      }
       if (!silent || records.length === 0) {
         setError(msg);
       }
@@ -216,103 +204,7 @@ export default function App() {
   };
 
   const copyAppsScriptCode = () => {
-    const code = `function doGet(e) {
-  try {
-    // Tự động hỗ trợ đọc mọi Google Sheet khác qua tham số ?sheetId=... mà không cần triển khai lại!
-    var sheetId = e && e.parameter && e.parameter.sheetId;
-    var ss = sheetId ? SpreadsheetApp.openById(sheetId) : SpreadsheetApp.getActiveSpreadsheet();
-    
-    var gid = e && e.parameter && e.parameter.gid;
-    var sheet;
-    if (gid) {
-      var sheets = ss.getSheets();
-      for (var s = 0; s < sheets.length; s++) {
-        if (String(sheets[s].getSheetId()) === String(gid)) {
-          sheet = sheets[s];
-          break;
-        }
-      }
-    }
-    if (!sheet) {
-      sheet = ss.getActiveSheet();
-    }
-    
-    var data = sheet.getDataRange().getValues();
-    if (data.length <= 1) {
-      return ContentService.createTextOutput(JSON.stringify({ status: 'success', data: [] }))
-        .setMimeType(ContentService.MimeType.JSON);
-    }
-    
-    // Tự động đọc tất cả các tiêu đề cột ở Hàng 1 (bao gồm cả BỘ PHẬN HIỆN TẠI và MENU HIỆN TẠI)
-    var headers = data[0].map(function(h) { return String(h).trim(); });
-    var records = [];
-    
-    for (var i = 1; i < data.length; i++) {
-      var row = data[i];
-      if (!row.some(function(cell) { return cell !== '' && cell !== null; })) continue;
-      
-      var record = { rowIndex: i + 1 };
-      for (var j = 0; j < headers.length; j++) {
-        var header = headers[j];
-        if (!header) continue;
-        var val = row[j];
-        if (val instanceof Date) {
-          record[header] = Utilities.formatDate(val, Session.getScriptTimeZone(), "dd/MM/yyyy HH:mm");
-        } else {
-          record[header] = val != null ? String(val) : '';
-        }
-      }
-      records.push(record);
-    }
-    
-    return ContentService.createTextOutput(JSON.stringify({ 
-      status: 'success', 
-      sheetName: sheet.getName(),
-      data: records 
-    })).setMimeType(ContentService.MimeType.JSON);
-  } catch (err) {
-    return ContentService.createTextOutput(JSON.stringify({ status: 'error', message: err.toString() }))
-      .setMimeType(ContentService.MimeType.JSON);
-  }
-}
-
-function doPost(e) {
-  try {
-    var contents = JSON.parse(e.postData.contents);
-    var rowIndex = contents.rowIndex;
-    var timestamp = contents.timestamp;
-    var sheetId = contents.sheetId;
-    
-    var ss = sheetId ? SpreadsheetApp.openById(sheetId) : SpreadsheetApp.getActiveSpreadsheet();
-    var sheet = ss.getActiveSheet();
-    var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-    
-    function clean(str) {
-      return String(str || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-    }
-    
-    var colIndex = -1;
-    for (var c = 0; c < headers.length; c++) {
-      var h = clean(headers[c]);
-      if (h.indexOf('trathucte') !== -1 || h.indexOf('thucte') !== -1) {
-        colIndex = c + 1;
-        break;
-      }
-    }
-    if (colIndex === -1) {
-      colIndex = headers.length;
-    }
-    
-    sheet.getRange(rowIndex, colIndex).setValue(timestamp);
-    
-    return ContentService.createTextOutput(JSON.stringify({ status: 'success' }))
-      .setMimeType(ContentService.MimeType.JSON);
-  } catch (err) {
-    return ContentService.createTextOutput(JSON.stringify({ status: 'error', message: err.toString() }))
-      .setMimeType(ContentService.MimeType.JSON);
-  }
-}`;
-    navigator.clipboard.writeText(code);
+    navigator.clipboard.writeText(APPS_SCRIPT_TEMPLATE);
     setHasCopiedCode(true);
     setTimeout(() => setHasCopiedCode(false), 3000);
   };
@@ -506,9 +398,9 @@ function doPost(e) {
             <div className="flex-1">
               <div className="flex flex-wrap items-center justify-between gap-1 mb-1.5">
                 <label className="text-xs font-semibold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
-                  <span>Cấu hình Link Google Sheets / Web App URL</span>
+                  <span>Web App URL (Google Apps Script)</span>
                   <span className="text-[10px] font-normal normal-case text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 font-medium">
-                    ⚡ Tự động nạp mọi Google Sheet mới
+                    ⚡ Tự động cập nhật khi thay đổi dữ liệu Sheet
                   </span>
                 </label>
               </div>
@@ -518,7 +410,7 @@ function doPost(e) {
                     type="text"
                     value={webAppUrl}
                     onChange={(e) => setWebAppUrl(e.target.value)}
-                    placeholder="Dán liên kết Google Sheets (https://docs.google.com/spreadsheets/d/...) hoặc Web App URL..."
+                    placeholder="Dán Web App URL của Google Apps Script (kết thúc bằng /exec)..."
                     className="w-full rounded-lg border border-slate-300 pl-3 pr-8 py-2 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all font-mono"
                   />
                   {webAppUrl && (
@@ -554,7 +446,7 @@ function doPost(e) {
                 <button
                   onClick={() => setShowGuideModal(true)}
                   className="flex items-center gap-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 px-3 py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors shadow-2xs whitespace-nowrap cursor-pointer"
-                  title="Xem hướng dẫn cách liên kết Google Sheets hoặc Apps Script"
+                  title="Xem hướng dẫn cách liên kết Apps Script"
                 >
                   <HelpCircle className="w-4 h-4 text-blue-600" />
                   <span className="hidden sm:inline">Hướng dẫn kết nối</span>
@@ -563,9 +455,9 @@ function doPost(e) {
               </div>
               <div className="mt-1.5 flex items-center justify-between text-[11px] text-slate-500">
                 <span className="flex items-center gap-1 text-slate-600">
-                  <span className="font-semibold text-emerald-700">💡 Đồng bộ tức thì:</span>
+                  <span className="font-semibold text-emerald-700">💡 Cập nhật tức thì:</span>
                   <span>
-                    Chỉ cần dán link Google Sheet bất kỳ (chọn chia sẻ &ldquo;Bất kỳ ai có liên kết&rdquo;). Khi sửa sang sheet khác, chỉ cần dán link mới là đồng bộ ngay mà không cần sửa code!
+                    Bất cứ khi nào bạn sửa, xóa, hoặc dán dữ liệu mới vào Google Sheet: Chỉ cần bấm &ldquo;Tải lại dữ liệu&rdquo; (hoặc đợi chu kỳ tự động tải), hệ thống sẽ nạp dữ liệu mới nhất ngay lập tức mà không bao giờ báo lỗi!
                   </span>
                 </span>
               </div>
@@ -743,7 +635,7 @@ function doPost(e) {
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white hover:bg-red-100 text-red-800 border border-red-300 text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
               >
                 <HelpCircle className="w-3.5 h-3.5 text-red-600" />
-                <span>Xem cách dán link Google Sheets trực tiếp (0 cần code)</span>
+                <span>Xem hướng dẫn lấy Web App URL</span>
               </button>
             </div>
           </div>
@@ -803,7 +695,7 @@ function doPost(e) {
               <div className="flex items-center gap-2">
                 <BookOpen className="w-5 h-5 text-emerald-200" />
                 <h3 className="font-bold text-base sm:text-lg">
-                  Hướng dẫn kết nối Google Sheets
+                  Hướng dẫn kết nối Google Apps Script
                 </h3>
               </div>
               <button
@@ -814,156 +706,76 @@ function doPost(e) {
               </button>
             </div>
 
-            {/* Tab navigation */}
-            <div className="flex border-b border-slate-200 bg-slate-50 px-6 pt-2">
-              <button
-                onClick={() => setGuideTab('direct')}
-                className={cn(
-                  'pb-2.5 px-3 text-xs sm:text-sm font-semibold border-b-2 transition-all cursor-pointer',
-                  guideTab === 'direct'
-                    ? 'border-emerald-600 text-emerald-700'
-                    : 'border-transparent text-slate-500 hover:text-slate-800'
-                )}
-              >
-                ⭐ Cách 1: Dán link Google Sheets (Khuyên dùng - 0 cần code)
-              </button>
-              <button
-                onClick={() => setGuideTab('script')}
-                className={cn(
-                  'pb-2.5 px-3 text-xs sm:text-sm font-semibold border-b-2 transition-all cursor-pointer',
-                  guideTab === 'script'
-                    ? 'border-emerald-600 text-emerald-700'
-                    : 'border-transparent text-slate-500 hover:text-slate-800'
-                )}
-              >
-                Cách 2: Triển khai Apps Script vạn năng
-              </button>
-            </div>
-
             <div className="p-6 overflow-y-auto space-y-5 text-xs sm:text-sm text-slate-700">
-              {guideTab === 'direct' ? (
-                <div className="space-y-4">
-                  <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-900 text-xs sm:text-sm leading-relaxed">
-                    <strong className="text-emerald-950 font-bold block mb-1">
-                      Ưu điểm vượt trội của Cách 1:
-                    </strong>
-                    • <strong>Không cần chạm vào code:</strong> Không sợ lỗi 404 Drive hay lỗi mã triển khai.<br />
-                    • <strong>Tự do đổi file:</strong> Khi bạn sửa dữ liệu ở Google Sheet khác, chỉ cần dán link bảng tính mới vào là đồng bộ ngay lập tức!<br />
-                    • <strong>Tốc độ tức thì:</strong> Tải và cập nhật liên tục dưới 200 mili-giây.
-                  </div>
+              <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-900 text-xs sm:text-sm leading-relaxed">
+                <strong className="text-emerald-950 font-bold block mb-1">
+                  ⚡ Đồng bộ tự động & Ổn định tuyệt đối:
+                </strong>
+                Chỉ cần triển khai mã Apps Script này 1 lần vào bảng tính của bạn. Bất cứ khi nào bạn chỉnh sửa, thêm mới hoặc thay thế toàn bộ dữ liệu trong trang tính đó, ứng dụng sẽ tự động cập nhật ngay mà không bao giờ báo lỗi!
+              </div>
 
-                  <div className="space-y-2">
-                    <h4 className="font-bold text-slate-900 text-sm flex items-center gap-1.5">
-                      <span className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center text-xs font-bold">1</span>
-                      <span>Mở bảng tính Google Sheets của bạn</span>
-                    </h4>
-                    <p className="text-slate-600 pl-6">
-                      Mở bất kỳ file Google Sheets nào chứa danh sách hồ sơ cần theo dõi.
-                    </p>
-                  </div>
+              {/* Step 1 */}
+              <div className="space-y-1.5">
+                <h4 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                  <span className="w-6 h-6 rounded-full bg-emerald-600 text-white flex items-center justify-center text-xs font-bold">1</span>
+                  <span>Mở Apps Script trên Google Sheets</span>
+                </h4>
+                <p className="text-slate-600 pl-8">
+                  Mở bảng tính Google Sheets của bạn ➔ Vào menu <strong>Tiện ích mở rộng (Extensions)</strong> ➔ Chọn <strong>Apps Script</strong>.
+                </p>
+              </div>
 
-                  <div className="space-y-2">
-                    <h4 className="font-bold text-slate-900 text-sm flex items-center gap-1.5">
-                      <span className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center text-xs font-bold">2</span>
-                      <span>Bật chia sẻ xem cho liên kết</span>
-                    </h4>
-                    <div className="pl-6 space-y-1.5 text-slate-600">
-                      <p>• Bấm nút <strong>Chia sẻ (Share)</strong> màu xanh ở góc trên cùng bên phải bảng tính.</p>
-                      <p>• Tại mục <strong>Quyền truy cập chung (General access)</strong>, đổi từ &ldquo;Hạn chế&rdquo; thành: <strong>&ldquo;Bất kỳ ai có đường liên kết&rdquo; (Anyone with the link)</strong> với vai trò là <strong>&ldquo;Người xem&rdquo; (Viewer)</strong>.</p>
-                      <p>• Bấm <strong>Xong (Done)</strong>.</p>
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <h4 className="font-bold text-slate-900 text-sm flex items-center gap-1.5">
-                      <span className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center text-xs font-bold">3</span>
-                      <span>Sao chép link bảng tính và dán vào ứng dụng</span>
-                    </h4>
-                    <div className="pl-6 space-y-1 text-slate-600">
-                      <p>• Sao chép toàn bộ đường link trên thanh địa chỉ trình duyệt, có dạng:</p>
-                      <div className="p-2 bg-slate-100 rounded-lg font-mono text-xs text-slate-800 break-all select-all border border-slate-200">
-                        https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5.../edit
-                      </div>
-                      <p className="pt-1">• Dán vào ô <strong>Cấu hình Link Google Sheets</strong> và bấm <strong>Tải lại dữ liệu</strong> là xong!</p>
-                    </div>
+              {/* Step 2 */}
+              <div className="space-y-2">
+                <h4 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                  <span className="w-6 h-6 rounded-full bg-emerald-600 text-white flex items-center justify-center text-xs font-bold">2</span>
+                  <span>Dán mã Apps Script</span>
+                </h4>
+                <p className="text-slate-600 pl-8">
+                  Xóa toàn bộ mã cũ trong tệp <code>Mã.gs</code> (hoặc <code>Code.gs</code>) và dán đoạn mã chuẩn bên dưới:
+                </p>
+                <div className="pl-8">
+                  <div className="bg-slate-900 rounded-xl p-3 text-slate-200 font-mono text-xs relative overflow-x-auto max-h-56 border border-slate-800">
+                    <button
+                      onClick={copyAppsScriptCode}
+                      className="absolute top-2.5 right-2.5 bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg text-xs font-sans font-semibold flex items-center gap-1.5 transition-colors cursor-pointer shadow-md z-10"
+                    >
+                      {hasCopiedCode ? (
+                        <>
+                          <Check className="w-4 h-4 text-emerald-200" />
+                          <span>Đã sao chép mã!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-4 h-4" />
+                          <span>Sao chép mã Apps Script</span>
+                        </>
+                      )}
+                    </button>
+                    <pre className="pr-32 leading-relaxed whitespace-pre font-mono text-[11px]">
+{APPS_SCRIPT_TEMPLATE}
+                    </pre>
                   </div>
                 </div>
-              ) : (
-                <div className="space-y-4">
-                  <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-blue-900 text-xs leading-relaxed">
-                    Mã bên dưới là <strong>Apps Script vạn năng</strong>: Bạn chỉ cần triển khai 1 lần duy nhất, sau đó có thể dùng để đồng bộ bất kỳ Google Sheet nào khác mà không bao giờ cần tạo triển khai mới!
-                  </div>
+              </div>
 
-                  <div className="space-y-2">
-                    <h4 className="font-bold text-slate-900 text-sm flex items-center gap-1.5">
-                      <span className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center text-xs font-bold">1</span>
-                      <span>Mở Apps Script trên Google Sheets</span>
-                    </h4>
-                    <p className="text-slate-600 pl-6">
-                      Vào menu <strong>Tiện ích mở rộng (Extensions)</strong> ➔ chọn <strong>Apps Script</strong>.
-                    </p>
+              {/* Step 3 */}
+              <div className="space-y-2">
+                <h4 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                  <span className="w-6 h-6 rounded-full bg-emerald-600 text-white flex items-center justify-center text-xs font-bold">3</span>
+                  <span>Triển khai bản Web App và lấy URL</span>
+                </h4>
+                <div className="pl-8 space-y-1.5 text-slate-600">
+                  <p>1. Bấm nút <strong>Lưu (Save)</strong> hoặc nhấn tổ hợp phím <code>Ctrl + S</code>.</p>
+                  <p>2. Bấm nút màu xanh <strong>Triển khai (Deploy)</strong> ở góc trên bên phải ➔ Chọn <strong>Bản triển khai mới (New deployment)</strong>.</p>
+                  <p>3. Bấm vào biểu tượng bánh răng bên cạnh &ldquo;Chọn loại&rdquo; ➔ Chọn <strong>Ứng dụng web (Web app)</strong>.</p>
+                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-900 text-xs font-medium space-y-1 my-1">
+                    <p>• <strong>Thực thi dưới dạng (Execute as):</strong> Chọn <code>Tôi (Me)</code></p>
+                    <p>• <strong>Người có quyền truy cập (Who has access):</strong> Chọn <code>Bất kỳ ai (Anyone)</code></p>
                   </div>
-
-                  <div className="space-y-2">
-                    <h4 className="font-bold text-slate-900 text-sm flex items-center gap-1.5">
-                      <span className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center text-xs font-bold">2</span>
-                      <span>Dán mã Apps Script vạn năng</span>
-                    </h4>
-                    <div className="pl-6">
-                      <div className="bg-slate-900 rounded-xl p-3 text-slate-200 font-mono text-xs relative overflow-x-auto max-h-48 border border-slate-800">
-                        <button
-                          onClick={copyAppsScriptCode}
-                          className="absolute top-2 right-2 bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1 rounded text-xs font-sans font-semibold flex items-center gap-1 transition-colors cursor-pointer shadow-sm"
-                        >
-                          {hasCopiedCode ? (
-                            <>
-                              <Check className="w-3.5 h-3.5" />
-                              <span>Đã sao chép!</span>
-                            </>
-                          ) : (
-                            <>
-                              <Copy className="w-3.5 h-3.5" />
-                              <span>Sao chép mã</span>
-                            </>
-                          )}
-                        </button>
-                        <pre className="pr-24 leading-relaxed">
-{`function doGet(e) {
-  try {
-    var sheetId = e && e.parameter && e.parameter.sheetId;
-    var ss = sheetId ? SpreadsheetApp.openById(sheetId) : SpreadsheetApp.getActiveSpreadsheet();
-    var sheet = ss.getActiveSheet();
-    var data = sheet.getDataRange().getValues();
-    return ContentService.createTextOutput(JSON.stringify({
-      status: "success",
-      data: data,
-      sheetName: sheet.getName()
-    })).setMimeType(ContentService.MimeType.JSON);
-  } catch (err) {
-    return ContentService.createTextOutput(JSON.stringify({ status: "error", message: err.toString() })).setMimeType(ContentService.MimeType.JSON);
-  }
-}`}
-                        </pre>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <h4 className="font-bold text-slate-900 text-sm flex items-center gap-1.5">
-                      <span className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center text-xs font-bold">3</span>
-                      <span>Triển khai Web App</span>
-                    </h4>
-                    <div className="pl-6 space-y-1.5 text-slate-600">
-                      <p>• Bấm <strong>Triển khai (Deploy)</strong> ➔ <strong>Bản triển khai mới (New deployment)</strong> ➔ Chọn loại <strong>Ứng dụng web (Web app)</strong>.</p>
-                      <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-900 text-xs font-medium space-y-1 my-1">
-                        <p>1. <strong>Thực thi dưới dạng:</strong> Chọn <code>Tôi (Me)</code></p>
-                        <p>2. <strong>Người có quyền truy cập:</strong> Chọn <code>Bất kỳ ai (Anyone)</code></p>
-                      </div>
-                      <p>• Sao chép URL Web App (kết thúc bằng <code>/exec</code>) và dán vào ô cấu hình.</p>
-                    </div>
-                  </div>
+                  <p>4. Bấm <strong>Triển khai</strong> ➔ Sao chép <strong>URL ứng dụng web</strong> (đường link kết thúc bằng <code>/exec</code>) và dán vào ô bên trên!</p>
                 </div>
-              )}
+              </div>
             </div>
 
             <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-2">

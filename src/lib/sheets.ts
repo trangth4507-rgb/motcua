@@ -199,6 +199,34 @@ export function normalizeRecord(raw: any, index: number, headerMap?: Record<stri
       else if (matched === 'traThucTe' && !record.traThucTe) record.traThucTe = val;
       else if (k === 'stt' && !record.stt) record.stt = val;
     }
+
+    // Smart splitting for combined "Cơ quan / Cán bộ XL" column
+    if (!record.canBoXuLy && record.coQuanXuLy) {
+      if (record.coQuanXuLy.includes('/') || record.coQuanXuLy.includes(' - ')) {
+        const parts = record.coQuanXuLy.split(/[\/\-]/).map((s) => s.trim()).filter(Boolean);
+        if (parts.length >= 2) {
+          record.coQuanXuLy = parts[0];
+          record.canBoXuLy = parts.slice(1).join(' - ');
+        }
+      }
+    }
+
+    // Smart date scanner fallback for object rows
+    if (!record.ngayTra || !record.ngayNhan) {
+      const dateVals: string[] = [];
+      for (const v of Object.values(raw)) {
+        const vStr = String(v ?? '').trim();
+        if (/\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}/.test(vStr)) {
+          dateVals.push(vStr);
+        }
+      }
+      if (dateVals.length >= 2) {
+        if (!record.ngayNhan) record.ngayNhan = dateVals[0];
+        if (!record.ngayTra) record.ngayTra = dateVals[1];
+      } else if (dateVals.length === 1 && !record.ngayTra) {
+        record.ngayTra = dateVals[0];
+      }
+    }
   }
 
   return record;
@@ -837,95 +865,44 @@ export async function fetchSheetData(
 ): Promise<{ records: SheetRecord[]; sheetName: string; error?: string }> {
   try {
     if (!webAppUrl || !webAppUrl.trim()) {
-      throw new Error('Vui lòng nhập Web App URL của Apps Script hoặc liên kết Google Sheets');
+      throw new Error('Vui lòng nhập Web App URL của Google Apps Script (kết thúc bằng /exec)');
     }
 
-    const cleanUrl = webAppUrl.trim().replace(/^["']|["']$/g, '');
+    let cleanUrl = webAppUrl.trim().replace(/^["']|["']$/g, '');
 
-    // Detect if URL is a Google Sheets spreadsheet link or raw Sheet ID
+    // Nếu người dùng lỡ dán link Google Sheets thay vì link Apps Script
     const isGoogleSpreadsheet =
-      cleanUrl.includes('docs.google.com/spreadsheets') ||
-      cleanUrl.includes('drive.google.com') ||
-      /^[a-zA-Z0-9-_]{25,}$/.test(cleanUrl);
+      (cleanUrl.includes('docs.google.com/spreadsheets') || cleanUrl.includes('drive.google.com')) &&
+      !cleanUrl.includes('script.google.com');
 
-    // Case 1: Google Spreadsheet link (Dán thẳng link bất kỳ Google Sheet nào)
     if (isGoogleSpreadsheet) {
-      let sheetId = '';
-      const idMatch = cleanUrl.match(/docs\.google\.com\/spreadsheets\/(?:d|u\/[0-9]+\/d)\/([a-zA-Z0-9-_]+)/);
-      if (idMatch && idMatch[1]) {
-        sheetId = idMatch[1];
-      } else if (/^[a-zA-Z0-9-_]{25,}$/.test(cleanUrl)) {
-        sheetId = cleanUrl;
-      }
-
-      const gidMatch = cleanUrl.match(/[#&?]gid=([0-9]+)/);
-      const gidParam = gidMatch ? `&gid=${gidMatch[1]}` : '';
-
-      if (sheetId) {
-        // Chiến lược 1: Thử nạp siêu tốc qua JSONP (Hoàn toàn không bị chặn CORS, thời gian tải < 200ms)
-        try {
-          const gvizData = await fetchGvizJsonp(sheetId, gidParam);
-          if (gvizData && (gvizData.table || gvizData.status === 'ok')) {
-            return parseGvizResponse(gvizData);
-          }
-        } catch (jsonpErr) {
-          console.warn('JSONP fetch attempt failed, trying proxy...', jsonpErr);
-        }
-
-        // Chiến lược 2: Thử nạp qua Dev Proxy (/api/proxy) nếu chạy trong môi trường dev
-        try {
-          const proxyResult = await fetchProxyGvizOrCsv(sheetId, gidParam);
-          if (proxyResult && proxyResult.records.length > 0) {
-            return proxyResult;
-          }
-        } catch (proxyErr) {
-          console.warn('Proxy fetch attempt failed, checking master webapp...', proxyErr);
-        }
-
-        // Chiến lược 3: Nếu bảng tính riêng tư, gọi qua Web App vạn năng (nếu người dùng đã cấu hình trước đó)
-        const masterWebApp = localStorage.getItem('deadline_master_webapp_url');
-        if (masterWebApp && masterWebApp.includes('script.google.com')) {
-          try {
-            const separator = masterWebApp.includes('?') ? '&' : '?';
-            const bridgeUrl = `${masterWebApp}${separator}sheetId=${sheetId}${gidParam}&_t=${Date.now()}`;
-            const res = await fetch(bridgeUrl);
-            const text = await res.text();
-            if (text && !text.includes('Sorry, the file you have requested does not exist')) {
-              const data = JSON.parse(text);
-              if (data && data.status === 'success' && Array.isArray(data.data)) {
-                if (Array.isArray(data.data[0])) {
-                  return parse2DArrayRecords(data.data);
-                }
-                const raw = data.data;
-                const records = raw.map((item: any, idx: number) => normalizeRecord(item, idx));
-                pruneCompletedOverrides(records);
-                return { records, sheetName: data.sheetName || 'Google Spreadsheet' };
-              }
-            }
-          } catch (bridgeErr) {
-            console.warn('Bridge master webapp fetch failed:', bridgeErr);
-          }
-        }
-
-        throw new Error(
-          'Không thể tải dữ liệu trực tiếp từ Google Sheets này.\n\n' +
-          '• Nguyên nhân thường gặp: Bảng tính Google Sheets đang đặt ở chế độ Riêng tư (Private).\n\n' +
-          '• Cách khắc phục cực kỳ đơn giản (Không cần code, không cần triển khai mới):\n' +
-          '1. Mở bảng tính Google Sheets của bạn trên trình duyệt.\n' +
-          '2. Bấm nút màu xanh "Chia sẻ" (Share) ở góc trên bên phải.\n' +
-          '3. Ở mục "Quyền truy cập chung" (General access), chuyển thành: "Bất kỳ ai có đường liên kết" (Anyone with the link) với quyền "Người xem" (Viewer).\n' +
-          '4. Bấm "Xong", sau đó quay lại đây bấm "Tải lại dữ liệu" để đồng bộ tự động ngay lập tức!'
-        );
-      }
+      throw new Error(
+        'BẠN ĐANG DÁN ĐƯỜNG LIÊN KẾT BẢNG TÍNH GOOGLE SHEETS:\n\n' +
+        'Để ứng dụng tự động đồng bộ ổn định và nhận dữ liệu mới tức thì khi bạn thay thế dữ liệu trong sheet, hệ thống kết nối chuẩn qua Web App URL của Google Apps Script.\n\n' +
+        '👉 Các bước kết nối cực nhanh trong 30 giây:\n' +
+        '1. Mở bảng tính Google Sheets của bạn ➔ Tiện ích mở rộng (Extensions) ➔ Apps Script.\n' +
+        '2. Dán đoạn mã Apps Script chuẩn (bấm nút "Hướng dẫn kết nối" ở góc phải để sao chép mã).\n' +
+        '3. Bấm "Triển khai" ➔ "Bản triển khai mới" ➔ Chọn loại: "Ứng dụng web" (Người có quyền truy cập: "Bất kỳ ai").\n' +
+        '4. Sao chép URL ứng dụng web (kết thúc bằng /exec) và dán vào ô bên trên.\n\n' +
+        '💡 CHỈ CẦN LÀM 1 LẦN DUY NHẤT: Bất cứ khi nào bạn chỉnh sửa hoặc nhập thay thế dữ liệu mới vào đúng bảng tính đó, ứng dụng sẽ tự động tải dữ liệu mới nhất mà KHÔNG BAO GIỜ báo lỗi!'
+      );
     }
 
-    // Case 2: Google Apps Script Web App URL
+    // Nếu người dùng dán link trình soạn thảo Apps Script (/edit)
     if (cleanUrl.includes('script.google.com/home/projects') || (cleanUrl.includes('script.google.com') && cleanUrl.includes('/edit'))) {
       throw new Error(
         'ĐÂY LÀ ĐƯỜNG DẪN TRÌNH SOẠN THẢO APPS SCRIPT (Không phải Web App URL):\n\n' +
-        '• Để lấy đúng link: Vào Apps Script ➔ Bấm nút màu xanh "Triển khai" (Deploy) ➔ Chọn "Quản lý bản triển khai" ➔ Sao chép "URL ứng dụng web" (kết thúc bằng /exec).\n\n' +
-        '💡 KHUYÊN DÙNG: Bạn không cần dùng Apps Script! Hãy dán thẳng link Google Sheets vào ô bên trên và bật chia sẻ "Bất kỳ ai có liên kết".'
+        '• Cách lấy đúng link Web App:\n' +
+        '1. Trong Apps Script, bấm nút màu xanh "Triển khai" (Deploy) ở góc trên bên phải.\n' +
+        '2. Chọn "Quản lý bản triển khai" (Manage deployments).\n' +
+        '3. Sao chép "URL ứng dụng web" (kết thúc bằng /exec) và dán vào đây.\n\n' +
+        '💡 Sau khi dán URL này, mỗi khi bạn thay thế dữ liệu trong sheet, ứng dụng sẽ tự động tải dữ liệu mới mà không cần thao tác lại.'
       );
+    }
+
+    // Tự động chuyển /dev thành /exec nếu người dùng lỡ copy link test
+    if (cleanUrl.includes('script.google.com/macros/s/') && cleanUrl.endsWith('/dev')) {
+      cleanUrl = cleanUrl.replace(/\/dev$/, '/exec');
     }
 
     if (cleanUrl.includes('script.google.com')) {
@@ -934,35 +911,40 @@ export async function fetchSheetData(
 
     let text = '';
 
-    // Chiến lược 1: Thử gọi qua Proxy (/api/proxy) trước để tránh bị chặn CORS/iframe redirect
+    // Chiến lược 1: Gọi trực tiếp URL Web App (Trình duyệt tự động theo redirect của Google sang script.googleusercontent.com)
     try {
-      const proxyRes = await fetch(`/api/proxy?url=${encodeURIComponent(cleanUrl)}`);
-      if (proxyRes.ok) {
-        const pTxt = await proxyRes.text();
-        if (pTxt && !pTxt.includes('Sorry, the file you have requested does not exist') && !pTxt.includes('<!DOCTYPE html>')) {
-          text = pTxt;
-        }
-      }
-    } catch (e) {
-      console.warn('Proxy Apps Script fetch error:', e);
-    }
-
-    // Chiến lược 2: Gọi trực tiếp URL nếu proxy chưa được
-    if (!text) {
-      try {
-        const directRes = await fetch(cleanUrl);
+      const directRes = await fetch(cleanUrl, {
+        method: 'GET',
+        cache: 'no-store',
+      });
+      if (directRes.ok) {
         const dTxt = await directRes.text();
-        if (dTxt && !dTxt.includes('Sorry, the file you have requested does not exist')) {
+        if (dTxt && !dTxt.includes('Sorry, the file you have requested does not exist') && !dTxt.includes('<!DOCTYPE html>')) {
           text = dTxt;
         } else if (!text) {
           text = dTxt;
         }
+      }
+    } catch (e) {
+      console.warn('Direct Apps Script fetch error:', e);
+    }
+
+    // Chiến lược 2: Nếu trực tiếp chưa được, thử gọi qua Proxy (/api/proxy) nếu đang chạy trong môi trường dev
+    if (!text || text.includes('Sorry, the file you have requested does not exist')) {
+      try {
+        const proxyRes = await fetch(`/api/proxy?url=${encodeURIComponent(cleanUrl)}`);
+        if (proxyRes.ok) {
+          const pTxt = await proxyRes.text();
+          if (pTxt && !pTxt.includes('Sorry, the file you have requested does not exist') && !pTxt.includes('<!DOCTYPE html>')) {
+            text = pTxt;
+          }
+        }
       } catch (e) {
-        console.warn('Direct Apps Script fetch error:', e);
+        console.warn('Proxy Apps Script fetch error:', e);
       }
     }
 
-    // Check for Google 404 Drive error
+    // Kiểm tra lỗi 404 từ Google Drive
     if (
       !text ||
       text.includes('Sorry, the file you have requested does not exist') ||
@@ -970,11 +952,15 @@ export async function fetchSheetData(
       text.includes('does not exist')
     ) {
       throw new Error(
-        'ĐƯỜNG DẪN WEB APP KHÔNG TỒN TẠI (Lỗi 404 từ Google Drive):\n\n' +
+        'ĐƯỜNG DẪN WEB APP APPS SCRIPT CHƯA SẴN SÀNG (Lỗi 404 từ Google Drive):\n\n' +
         'Google thông báo: "Sorry, the file you have requested does not exist."\n\n' +
-        '• Nguyên nhân: Mã bản triển khai Apps Script này đã bị xóa, bị thay thế hoặc URL bị copy thiếu ký tự.\n\n' +
-        '💡 GIẢI PHÁP TỐI ƯU NHẤT (Không cần code hay triển khai lại):\n' +
-        'Bạn chỉ cần dán thẳng đường liên kết Google Sheets (ví dụ: https://docs.google.com/spreadsheets/d/...) vào ô bên trên và bật chia sẻ "Bất kỳ ai có đường liên kết". Ứng dụng sẽ đồng bộ trực tiếp siêu tốc mà không phụ thuộc vào Apps Script!'
+        '• Nguyên nhân: Bản triển khai Apps Script này chưa được cấp quyền công khai "Bất kỳ ai" (Anyone), hoặc URL bị copy thiếu ký tự.\n\n' +
+        '👉 Cách xử lý nhanh trong 30 giây:\n' +
+        '1. Trên bảng tính Google Sheets của bạn ➔ Tiện ích mở rộng ➔ Apps Script.\n' +
+        '2. Bấm nút màu xanh "Triển khai" (Deploy) ➔ Chọn "Quản lý bản triển khai".\n' +
+        '3. Kiểm tra mục "Người có quyền truy cập" (Who has access) xem đã là "Bất kỳ ai" (Anyone) chưa. Nếu chưa, bấm biểu tượng cây bút để sửa thành "Bất kỳ ai".\n' +
+        '4. Sao chép lại URL ứng dụng web (kết thúc bằng /exec) và dán vào ô bên trên.\n\n' +
+        '💡 CHỈ CẦN THIẾT LẬP 1 LẦN DUY NHẤT: Sau này bạn nhập, sửa hoặc thay thế dữ liệu mới vào đúng bảng tính đó, ứng dụng sẽ tự động tải dữ liệu mới nhất mà KHÔNG BAO GIỜ báo lỗi!'
       );
     }
 
@@ -983,7 +969,7 @@ export async function fetchSheetData(
       data = JSON.parse(text);
     } catch {
       throw new Error(
-        'Phản hồi từ máy chủ không phải là JSON hợp lệ. ' +
+        'Phản hồi từ Google Apps Script không phải là JSON hợp lệ. ' +
         (text.length < 150 ? `Nội dung nhận được: "${text}"` : 'Vui lòng kiểm tra lại đường dẫn Web App.')
       );
     }
@@ -1005,9 +991,17 @@ export async function fetchSheetData(
       rawList = data.values;
     }
 
-    // If 2D array matrix returned
+    // Nếu trả về dạng ma trận mảng 2 chiều raw
     if (rawList.length > 0 && Array.isArray(rawList[0])) {
       return parse2DArrayRecords(rawList);
+    }
+
+    // Nếu data.data rỗng hoặc ít thông tin nhưng có data.raw (ma trận 2 chiều do Apps Script nâng cao trả về)
+    if (Array.isArray(data.raw) && data.raw.length > 1) {
+      const parsed2D = parse2DArrayRecords(data.raw);
+      if (parsed2D.records.length > 0) {
+        return { records: parsed2D.records, sheetName: data.sheetName || parsed2D.sheetName };
+      }
     }
 
     const overrides = getCompletedOverrides();
@@ -1182,4 +1176,170 @@ export async function updateRecordField(
     return false;
   }
 }
+
+// Mã nguồn chuẩn của Google Apps Script (tự động nhận diện dữ liệu mới, an toàn 100% khi thay thế sheet)
+export const APPS_SCRIPT_TEMPLATE = `function doGet(e) {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    
+    // 1. Tự động lấy sheet có dữ liệu (ưu tiên sheet đang mở, nếu rỗng thì quét tìm sheet có nhiều dòng nhất)
+    var sheet = ss.getActiveSheet();
+    var data = sheet ? sheet.getDataRange().getValues() : [];
+    
+    if (!data || data.length <= 1) {
+      var allSheets = ss.getSheets();
+      for (var s = 0; s < allSheets.length; s++) {
+        var testData = allSheets[s].getDataRange().getValues();
+        if (testData && testData.length > (data ? data.length : 0)) {
+          sheet = allSheets[s];
+          data = testData;
+        }
+      }
+    }
+    
+    if (!data || data.length === 0) {
+      return ContentService.createTextOutput(JSON.stringify({
+        status: "success",
+        sheetName: sheet ? sheet.getName() : "Trang tính",
+        data: [],
+        raw: []
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    // 2. Tự động tìm hàng tiêu đề thông minh trong 10 hàng đầu tiên
+    var headerRowIdx = -1;
+    for (var r = 0; r < Math.min(data.length, 10); r++) {
+      var rowStr = data[r].map(function(c) { return String(c || "").toLowerCase(); }).join(" ");
+      var cleanStr = rowStr
+        .normalize("NFD").replace(/[\\u0300-\\u036f]/g, "")
+        .replace(/đ/g, "d").replace(/[^a-z0-9 ]/g, " ");
+      
+      if (
+        cleanStr.indexOf("ho so") !== -1 ||
+        cleanStr.indexOf("quy trinh") !== -1 ||
+        cleanStr.indexOf("thu tuc") !== -1 ||
+        cleanStr.indexOf("han tra") !== -1 ||
+        cleanStr.indexOf("ngay hen") !== -1 ||
+        cleanStr.indexOf("tiep nhan") !== -1 ||
+        cleanStr.indexOf("ngay nhan") !== -1
+      ) {
+        headerRowIdx = r;
+        break;
+      }
+    }
+    if (headerRowIdx === -1) headerRowIdx = 0;
+    
+    var headers = data[headerRowIdx].map(function(h) { return String(h || "").trim(); });
+    var records = [];
+    var timeZone = Session.getScriptTimeZone() || "Asia/Ho_Chi_Minh";
+    
+    // 3. Trích xuất dữ liệu, an toàn tuyệt đối với mọi kiểu dữ liệu (ngày giờ, số, chữ, rỗng)
+    for (var i = headerRowIdx + 1; i < data.length; i++) {
+      var row = data[i];
+      if (!row) continue;
+      
+      // Bỏ qua các hàng hoàn toàn rỗng
+      var hasValue = false;
+      for (var c = 0; c < row.length; c++) {
+        if (row[c] !== "" && row[c] !== null && row[c] !== undefined) {
+          hasValue = true;
+          break;
+        }
+      }
+      if (!hasValue) continue;
+      
+      var record = { rowIndex: i + 1 };
+      for (var j = 0; j < headers.length; j++) {
+        var header = headers[j];
+        if (!header) continue;
+        var val = row[j];
+        
+        if (val instanceof Date) {
+          try {
+            if (!isNaN(val.getTime())) {
+              var hours = val.getHours();
+              var mins = val.getMinutes();
+              if (hours !== 0 || mins !== 0) {
+                record[header] = Utilities.formatDate(val, timeZone, "dd/MM/yyyy HH:mm");
+              } else {
+                record[header] = Utilities.formatDate(val, timeZone, "dd/MM/yyyy");
+              }
+            } else {
+              record[header] = "";
+            }
+          } catch (eDate) {
+            record[header] = String(val || "");
+          }
+        } else {
+          record[header] = (val != null) ? String(val).trim() : "";
+        }
+      }
+      records.push(record);
+    }
+    
+    return ContentService.createTextOutput(JSON.stringify({ 
+      status: "success", 
+      sheetName: sheet.getName(),
+      total: records.length,
+      data: records,
+      raw: data,
+      headerRowIdx: headerRowIdx
+    })).setMimeType(ContentService.MimeType.JSON);
+    
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ 
+      status: "error", 
+      message: err.toString() 
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function doPost(e) {
+  try {
+    var contents = JSON.parse(e.postData.contents);
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getActiveSheet();
+    var data = sheet.getDataRange().getValues();
+    
+    function clean(str) {
+      return String(str || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    }
+    
+    var colIndex = -1;
+    for (var r = 0; r < Math.min(data.length, 10); r++) {
+      for (var c = 0; c < data[r].length; c++) {
+        var h = clean(data[r][c]);
+        if (h.indexOf("trathucte") !== -1 || h.indexOf("thucte") !== -1) {
+          colIndex = c + 1;
+          break;
+        }
+      }
+      if (colIndex !== -1) break;
+    }
+    if (colIndex === -1) {
+      colIndex = sheet.getLastColumn() + 1;
+      sheet.getRange(1, colIndex).setValue("Trả thực tế");
+    }
+    
+    // Hỗ trợ xử lý tích chọn hàng loạt nhiều hồ sơ cùng lúc
+    if (contents.action === "markMultipleComplete" && Array.isArray(contents.rowIndices)) {
+      var ts = contents.timestamp || "";
+      for (var k = 0; k < contents.rowIndices.length; k++) {
+        sheet.getRange(contents.rowIndices[k], colIndex).setValue(ts);
+      }
+      return ContentService.createTextOutput(JSON.stringify({ status: "success", count: contents.rowIndices.length }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    var rowIndex = contents.rowIndex;
+    var timestamp = contents.timestamp;
+    sheet.getRange(rowIndex, colIndex).setValue(timestamp);
+    return ContentService.createTextOutput(JSON.stringify({ status: "success" }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ status: "error", message: err.toString() }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+};
+`;
 
