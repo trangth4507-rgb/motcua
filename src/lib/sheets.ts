@@ -791,22 +791,59 @@ export async function fetchSheetData(
     }
 
     // Case 2: Google Apps Script Web App URL
+    if (cleanUrl.includes('script.google.com/home/projects') || (cleanUrl.includes('script.google.com') && cleanUrl.includes('/edit'))) {
+      throw new Error(
+        'ĐÂY LÀ ĐƯỜNG DẪN TRÌNH SOẠN THẢO APPS SCRIPT (Không phải Web App URL):\n\n' +
+        '• Để lấy đúng link: Vào Apps Script ➔ Bấm nút màu xanh "Triển khai" (Deploy) ➔ Chọn "Quản lý bản triển khai" ➔ Sao chép "URL ứng dụng web" (kết thúc bằng /exec).\n\n' +
+        '💡 KHUYÊN DÙNG: Bạn không cần dùng Apps Script! Hãy dán thẳng link Google Sheets vào ô bên trên và bật chia sẻ "Bất kỳ ai có liên kết".'
+      );
+    }
+
     if (cleanUrl.includes('script.google.com')) {
       localStorage.setItem('deadline_master_webapp_url', cleanUrl);
     }
 
-    const separator = cleanUrl.includes('?') ? '&' : '?';
-    const cacheBusterUrl = `${cleanUrl}${separator}_t=${Date.now()}`;
+    let text = '';
 
-    const res = await fetch(cacheBusterUrl);
-    const text = await res.text();
+    // Chiến lược 1: Thử gọi qua Proxy (/api/proxy) trước để tránh bị chặn CORS/iframe redirect
+    try {
+      const proxyRes = await fetch(`/api/proxy?url=${encodeURIComponent(cleanUrl)}`);
+      if (proxyRes.ok) {
+        const pTxt = await proxyRes.text();
+        if (pTxt && !pTxt.includes('Sorry, the file you have requested does not exist') && !pTxt.includes('<!DOCTYPE html>')) {
+          text = pTxt;
+        }
+      }
+    } catch (e) {
+      console.warn('Proxy Apps Script fetch error:', e);
+    }
+
+    // Chiến lược 2: Gọi trực tiếp URL nếu proxy chưa được
+    if (!text) {
+      try {
+        const directRes = await fetch(cleanUrl);
+        const dTxt = await directRes.text();
+        if (dTxt && !dTxt.includes('Sorry, the file you have requested does not exist')) {
+          text = dTxt;
+        } else if (!text) {
+          text = dTxt;
+        }
+      } catch (e) {
+        console.warn('Direct Apps Script fetch error:', e);
+      }
+    }
 
     // Check for Google 404 Drive error
-    if (res.status === 404 || text.includes('Sorry, the file you have requested does not exist') || text.includes('does not exist')) {
+    if (
+      !text ||
+      text.includes('Sorry, the file you have requested does not exist') ||
+      text.includes('Page not found') ||
+      text.includes('does not exist')
+    ) {
       throw new Error(
         'ĐƯỜNG DẪN WEB APP KHÔNG TỒN TẠI (Lỗi 404 từ Google Drive):\n\n' +
         'Google thông báo: "Sorry, the file you have requested does not exist."\n\n' +
-        '• Nguyên nhân: Mã bản triển khai (Deployment) Apps Script này đã bị xóa, bị thay thế hoặc URL bị copy thiếu ký tự.\n\n' +
+        '• Nguyên nhân: Mã bản triển khai Apps Script này đã bị xóa, bị thay thế hoặc URL bị copy thiếu ký tự.\n\n' +
         '💡 GIẢI PHÁP TỐI ƯU NHẤT (Không cần code hay triển khai lại):\n' +
         'Bạn chỉ cần dán thẳng đường liên kết Google Sheets (ví dụ: https://docs.google.com/spreadsheets/d/...) vào ô bên trên và bật chia sẻ "Bất kỳ ai có đường liên kết". Ứng dụng sẽ đồng bộ trực tiếp siêu tốc mà không phụ thuộc vào Apps Script!'
       );

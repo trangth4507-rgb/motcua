@@ -89,8 +89,21 @@ export default function App() {
     try {
       const { records: data, sheetName: sName, error: err } = await fetchSheetData(url);
       if (err) {
+        setAutoRefreshEnabled(false);
+        const is404 = err.includes('404') || err.includes('does not exist');
+        if (is404) {
+          // Xóa ngay URL chết khỏi bộ nhớ để người dùng không bị kẹt lặp lại lỗi
+          localStorage.removeItem('deadline_webapp_url');
+          localStorage.removeItem('deadline_master_webapp_url');
+          setWebAppUrl('');
+        }
         if (!silent || records.length === 0) {
           setError(err);
+        }
+        if (records.length === 0) {
+          setRecords(getDemoRecords());
+          setSheetName('Dữ liệu mô phỏng Một cửa điện tử');
+          setLastUpdated(new Date());
         }
       } else {
         localStorage.setItem('deadline_webapp_url', url);
@@ -101,8 +114,21 @@ export default function App() {
         setError(null);
       }
     } catch (err: any) {
+      setAutoRefreshEnabled(false);
+      const msg = err.message || 'Lỗi tải dữ liệu';
+      const is404 = msg.includes('404') || msg.includes('does not exist');
+      if (is404) {
+        localStorage.removeItem('deadline_webapp_url');
+        localStorage.removeItem('deadline_master_webapp_url');
+        setWebAppUrl('');
+      }
       if (!silent || records.length === 0) {
-        setError(err.message || 'Lỗi tải dữ liệu');
+        setError(msg);
+      }
+      if (records.length === 0) {
+        setRecords(getDemoRecords());
+        setSheetName('Dữ liệu mô phỏng Một cửa điện tử');
+        setLastUpdated(new Date());
       }
     } finally {
       if (silent) {
@@ -117,6 +143,11 @@ export default function App() {
   useEffect(() => {
     if (webAppUrl) {
       loadData(webAppUrl);
+    } else {
+      // Nếu chưa có URL, luôn nạp sẵn dữ liệu mẫu để giao diện hiển thị ngay lập tức
+      setRecords(getDemoRecords());
+      setSheetName('Dữ liệu mô phỏng Một cửa điện tử');
+      setLastUpdated(new Date());
     }
   }, []);
 
@@ -163,7 +194,20 @@ export default function App() {
     loadData(webAppUrl);
   };
 
+  const handleClearBadUrl = () => {
+    setWebAppUrl('');
+    localStorage.removeItem('deadline_webapp_url');
+    localStorage.removeItem('deadline_master_webapp_url');
+    setError(null);
+    setRecords(getDemoRecords());
+    setSheetName('Dữ liệu mô phỏng Một cửa điện tử');
+    setLastUpdated(new Date());
+  };
+
   const handleLoadDemoData = () => {
+    setWebAppUrl('');
+    localStorage.removeItem('deadline_webapp_url');
+    localStorage.removeItem('deadline_master_webapp_url');
     const demo = getDemoRecords();
     setRecords(demo);
     setSheetName('Dữ liệu mô phỏng Một cửa điện tử');
@@ -654,13 +698,16 @@ function doPost(e) {
 
         {/* Error notification */}
         {error && (
-          <div className="p-4 bg-red-50 text-red-800 rounded-xl border border-red-300 flex flex-col gap-3 shadow-sm animate-in fade-in duration-200">
+          <div className="p-4 bg-red-50 text-red-900 rounded-xl border border-red-300 flex flex-col gap-3 shadow-sm animate-in fade-in duration-200">
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-start gap-3 min-w-0">
                 <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5 text-red-600" />
                 <div className="flex-1 min-w-0">
-                  <div className="font-bold text-sm text-red-900 mb-1">
-                    Thông báo lỗi khi tải dữ liệu
+                  <div className="font-bold text-sm text-red-900 mb-1 flex flex-wrap items-center gap-2">
+                    <span>Thông báo kết nối dữ liệu</span>
+                    <span className="text-[11px] font-normal px-2 py-0.5 rounded-full bg-red-100 text-red-700 border border-red-200">
+                      Đã tự động nạp dữ liệu mẫu để bạn tiếp tục thao tác
+                    </span>
                   </div>
                   <div className="text-xs sm:text-sm text-red-800 whitespace-pre-line leading-relaxed">
                     {error}
@@ -677,18 +724,26 @@ function doPost(e) {
             </div>
             <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-red-200/80 pl-8">
               <button
+                onClick={handleClearBadUrl}
+                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-bold shadow-xs transition-colors cursor-pointer"
+                title="Xóa bỏ URL cũ bị lỗi này khỏi bộ nhớ trình duyệt để không bao giờ bị báo lỗi lại"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Xóa bỏ URL lỗi này khỏi bộ nhớ</span>
+              </button>
+              <button
                 onClick={handleLoadDemoData}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs transition-colors cursor-pointer"
+                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs transition-colors cursor-pointer"
               >
                 <Sparkles className="w-3.5 h-3.5" />
-                <span>Tải dữ liệu mẫu để thử nghiệm giao diện ngay</span>
+                <span>Dùng dữ liệu mẫu (Đã sẵn sàng hoạt động)</span>
               </button>
               <button
                 onClick={() => setShowGuideModal(true)}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white hover:bg-red-100 text-red-800 border border-red-300 text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
               >
                 <HelpCircle className="w-3.5 h-3.5 text-red-600" />
-                <span>Xem hướng dẫn lấy Web App URL chính xác</span>
+                <span>Xem cách dán link Google Sheets trực tiếp (0 cần code)</span>
               </button>
             </div>
           </div>
