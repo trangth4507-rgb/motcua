@@ -488,14 +488,19 @@ export function RecordTable({
     });
   };
 
-  // 3. Batch mark complete: triggered by "Tích chọn" button in toolbar or floating bar
+  // 3. Batch mark complete: triggered by "Xử lý xong" button
   const handleTichChonBatch = () => {
-    // If rows were individually ticked via checkboxes, process those. Otherwise, process all uncompleted in view!
-    const targetRecords = selectedRowIndices.size > 0
-      ? filteredRecords.filter((r) => !r.isCompleted && selectedRowIndices.has(r.rowIndex))
-      : filteredRecords.filter((r) => !r.isCompleted);
+    // ONLY process the records that have been ticked/selected via checkboxes!
+    const targetRecords = filteredRecords.filter(
+      (r) => !r.isCompleted && selectedRowIndices.has(r.rowIndex)
+    );
 
-    if (targetRecords.length === 0) return;
+    if (targetRecords.length === 0) {
+      setToastMessage({
+        text: 'Vui lòng tích chọn ít nhất 1 hồ sơ ở cột "TÍCH CHỌN" trước khi bấm Xử lý xong!',
+      });
+      return;
+    }
 
     const count = targetRecords.length;
     const todayStr = getCurrentDateStr();
@@ -530,7 +535,7 @@ export function RecordTable({
     setSelectedRowIndices(new Set());
 
     setToastMessage({
-      text: `✓ Đã hoàn thành ${count} hồ sơ và chuyển ngay xuống danh sách Đã hoàn thành phía dưới!`,
+      text: `✓ Đã xử lý xong ${count} hồ sơ đã chọn và chuyển ngay xuống danh sách Đã hoàn thành phía dưới!`,
     });
 
     // 2. Background sync to Google Sheets
@@ -627,18 +632,20 @@ export function RecordTable({
       )}
 
       {/* Floating / Sticky Batch Action Bar when records are selected */}
+      {/* Floating / Sticky Batch Action Bar when records are selected */}
       {selectedRowIndices.size > 0 && (
-        <div className="mx-4 p-3 bg-emerald-800 text-white rounded-xl shadow-md flex flex-wrap items-center justify-between gap-3 animate-in fade-in duration-200 sticky top-16 z-20">
+        <div className="mx-4 p-3 bg-emerald-800 text-white rounded-xl shadow-lg border border-emerald-600 flex flex-wrap items-center justify-between gap-3 animate-in fade-in duration-200 sticky top-16 z-20">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-emerald-700/80 flex items-center justify-center font-bold text-sm">
+            <div className="w-8 h-8 rounded-lg bg-emerald-700/90 border border-emerald-500/50 flex items-center justify-center font-bold text-sm shadow-xs">
               {selectedRowIndices.size}
             </div>
             <div>
-              <div className="font-bold text-sm leading-tight">
-                Đã chọn {selectedRowIndices.size} hồ sơ cần hoàn thành
+              <div className="font-bold text-sm leading-tight flex items-center gap-1.5">
+                <span>Đã tích chọn <strong>{selectedRowIndices.size}</strong> hồ sơ</span>
+                <span className="text-[11px] bg-emerald-600/80 px-2 py-0.5 rounded-full font-medium">Sẵn sàng xử lý</span>
               </div>
               <div className="text-xs text-emerald-200">
-                Nhấn nút bên cạnh để hoàn thành và chuyển ngay toàn bộ hồ sơ đã chọn xuống phía dưới
+                Bấm nút &ldquo;Xử lý xong&rdquo; bên cạnh để hoàn thành và chuyển ngay toàn bộ {selectedRowIndices.size} hồ sơ này xuống danh sách phía dưới
               </div>
             </div>
           </div>
@@ -647,7 +654,7 @@ export function RecordTable({
             <button
               onClick={handleTichChonBatch}
               disabled={isBatchProcessing}
-              className="flex items-center gap-2 bg-white hover:bg-emerald-50 text-emerald-900 px-4 py-2 rounded-lg font-bold text-xs sm:text-sm shadow-sm transition-all cursor-pointer disabled:opacity-60"
+              className="flex items-center gap-2 bg-white hover:bg-emerald-50 text-emerald-950 px-4 py-2 rounded-lg font-bold text-xs sm:text-sm shadow-md transition-all cursor-pointer disabled:opacity-60"
             >
               {isBatchProcessing ? (
                 <>
@@ -661,7 +668,7 @@ export function RecordTable({
               ) : (
                 <>
                   <CheckCircle2 className="w-4 h-4 text-emerald-700" />
-                  <span>Hoàn thành {selectedRowIndices.size} hồ sơ (Chuyển xuống dưới)</span>
+                  <span>Xử lý xong ({selectedRowIndices.size} hồ sơ đã chọn)</span>
                 </>
               )}
             </button>
@@ -669,8 +676,8 @@ export function RecordTable({
             <button
               onClick={handleClearSelection}
               disabled={isBatchProcessing}
-              className="flex items-center gap-1.5 bg-emerald-900/80 hover:bg-emerald-950 text-white px-3 py-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer disabled:opacity-50"
-              title="Bỏ chọn"
+              className="flex items-center gap-1.5 bg-emerald-900/80 hover:bg-emerald-950 text-white px-3 py-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer disabled:opacity-50 border border-emerald-700"
+              title="Bỏ chọn tất cả"
             >
               <X className="w-3.5 h-3.5" />
               <span>Bỏ chọn</span>
@@ -695,17 +702,39 @@ export function RecordTable({
 
         {/* Dropdowns & Display Toggles */}
         <div className="flex flex-wrap items-center gap-2 text-xs sm:text-sm">
-          {/* Quick "Tích chọn" Button (without the word "tất cả") */}
-          {totalUncompletedCount > 0 && (
-            <button
-              onClick={handleTichChonBatch}
-              disabled={isBatchProcessing}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-sm transition-colors cursor-pointer disabled:opacity-50"
-              title="Tích chọn và chuyển ngay hồ sơ chưa hoàn thành xuống danh sách Đã hoàn thành phía dưới"
-            >
-              <CheckSquare className="w-4 h-4 text-white" />
-              <span>Tích chọn ({selectedRowIndices.size > 0 ? selectedRowIndices.size : totalUncompletedCount})</span>
-            </button>
+          {/* Quick Action Button for selected records */}
+          {selectedRowIndices.size > 0 ? (
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={handleTichChonBatch}
+                disabled={isBatchProcessing}
+                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-sm transition-all cursor-pointer disabled:opacity-50"
+                title={`Bấm để xử lý xong ${selectedRowIndices.size} hồ sơ đã tích chọn`}
+              >
+                <CheckCircle2 className="w-4 h-4 text-white" />
+                <span>Xử lý xong ({selectedRowIndices.size})</span>
+              </button>
+              <button
+                onClick={handleClearSelection}
+                disabled={isBatchProcessing}
+                className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-semibold border border-slate-300 transition-colors cursor-pointer"
+                title="Bỏ chọn tất cả"
+              >
+                Bỏ chọn
+              </button>
+            </div>
+          ) : (
+            uncompletedList.length > 0 && (
+              <button
+                onClick={toggleSelectAllInView}
+                disabled={isBatchProcessing}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 text-xs font-medium shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
+                title="Bấm để tích chọn tất cả hồ sơ đang hiển thị để xử lý hàng loạt"
+              >
+                <CheckSquare className="w-4 h-4 text-emerald-600" />
+                <span>Tích chọn tất cả ({uncompletedList.length})</span>
+              </button>
+            )
           )}
 
           {/* Sort Selector Dropdown */}
@@ -992,21 +1021,29 @@ export function RecordTable({
                       className={cn(
                         'transition-colors',
                         isSelected
-                          ? 'bg-emerald-50/80 font-medium'
+                          ? 'bg-emerald-50/90 font-medium border-l-4 border-l-emerald-600'
                           : 'odd:bg-white even:bg-slate-50/40 hover:bg-emerald-50/30'
                       )}
                     >
-                      {/* Checkbox column: Ticking instantly marks complete and moves down! */}
-                      <td className={cn(cellPadding, 'text-center')}>
-                        <button
-                          type="button"
-                          onClick={() => handleMarkComplete(record)}
-                          disabled={isProcessing || isBatchProcessing}
-                          className="w-5 h-5 rounded border border-slate-300 hover:border-emerald-500 hover:bg-emerald-50 inline-flex items-center justify-center transition-all cursor-pointer disabled:opacity-50 group"
-                          title="Tích vào đây để hoàn thành và chuyển ngay hồ sơ này xuống phía dưới"
+                      {/* Checkbox column: Ticking selects/deselects for batch processing! */}
+                      <td className={cn(cellPadding, 'text-center border-r border-slate-200/80')}>
+                        <label
+                          className="flex items-center justify-center cursor-pointer select-none p-0.5"
+                          onClick={(e) => e.stopPropagation()}
                         >
-                          <Check className="w-3.5 h-3.5 text-emerald-600 opacity-0 group-hover:opacity-100 transition-opacity" />
-                        </button>
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => toggleSelectRow(record.rowIndex)}
+                            disabled={isProcessing || isBatchProcessing}
+                            className="w-4 h-4 rounded text-emerald-600 border-slate-300 focus:ring-emerald-500 cursor-pointer disabled:opacity-40 accent-emerald-600"
+                            title={
+                              isSelected
+                                ? `Bỏ chọn hồ sơ ${record.soHoSo || record.stt}`
+                                : `Tích chọn hồ sơ ${record.soHoSo || record.stt}`
+                            }
+                          />
+                        </label>
                       </td>
 
                       {/* STT */}
