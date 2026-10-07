@@ -28,7 +28,34 @@ export function cleanKey(str: string): string {
     .replace(/[^a-z0-9]/g, '');
 }
 
-// Convert any format from Google Apps Script into a standard SheetRecord
+// Exhaustive Vietnamese keyword dictionary for public administrative records
+export const HEADER_KEYWORDS: Record<string, string[]> = {
+  stt: ['stt', 'sott', 'thutu', 'sothutu', 'tt'],
+  soHoSo: ['sohoso', 'mahoso', 'shs', 'sohs', 'mahs', 'hoso', 'sobiennhan', 'sohieu', 'sohd', 'madon', 'sodon'],
+  quyTrinh: ['quytrinh', 'thutuc', 'tenthutuc', 'tenquytrinh', 'tthc', 'linhvuc', 'tenhoso', 'noidung', 'congviec', 'tencongviec', 'tenhs'],
+  boPhanHienTai: ['bophanhientai', 'bophan', 'phongban', 'bphientai', 'phong', 'donvihientai', 'vitrihientai', 'buochientai', 'donvichutri', 'bophanthuchien', 'donvithuly'],
+  menuHienTai: ['menuhientai', 'menu', 'buocxuly', 'trangthaixuly', 'trangthai', 'mnhientai', 'buoc', 'quytrinhxuly', 'khau', 'khauxuly', 'tiendo'],
+  tenDonVi: ['tendonvi', 'hoten', 'chuhoso', 'nguoinop', 'nguoidung', 'tochuc', 'canhan', 'khachhang', 'tendoituong', 'chudautu', 'nguoiyeucau', 'ongba', 'tennguoinop', 'chuthe', 'doituong', 'tencn'],
+  coQuanXuLy: ['coquan', 'donvixuly', 'coquanxuly', 'donvi', 'phongchuyenmon', 'coquanthuchien', 'cqxl'],
+  canBoXuLy: ['canbo', 'nguoixuly', 'canbothuly', 'chuyenvien', 'nguoithuchien', 'canboxuly', 'cbtl', 'cbxl', 'chuyenvienthuly'],
+  ngayNhan: ['ngaynhan', 'tiepnhan', 'ngaytiepnhan', 'thoigiannhan', 'ngayvao', 'ngaynophoso', 'ngaynop', 'thoigiantiepnhan'],
+  ngayTra: ['hantra', 'ngayhen', 'ngaytra', 'hangiaiquyet', 'ngayhentra', 'hanchot', 'thoigianhantra', 'thoigianhen', 'denngay', 'hanchotxuly', 'thoigiangiaiquyet', 'hentra'],
+  traThucTe: ['trathucte', 'ngaytrathucte', 'thucte', 'ngayhoanthanh', 'ngaytrakq', 'ngayketthuc', 'daxuly', 'ngayxuly', 'thoigiantra', 'ngaychitra'],
+};
+
+export function matchFieldFromCleanHeader(cleanHeader: string): string | null {
+  if (!cleanHeader || cleanHeader.length <= 1) return null;
+  for (const [field, keywords] of Object.entries(HEADER_KEYWORDS)) {
+    for (const kw of keywords) {
+      if (cleanHeader === kw || cleanHeader.includes(kw)) {
+        return field;
+      }
+    }
+  }
+  return null;
+}
+
+// Convert any format from Google Sheets or Apps Script into a standard SheetRecord
 export function normalizeRecord(raw: any, index: number, headerMap?: Record<string, number>): SheetRecord {
   const record: SheetRecord = {
     rowIndex: index + 2,
@@ -49,12 +76,16 @@ export function normalizeRecord(raw: any, index: number, headerMap?: Record<stri
 
   // Case 1: raw is an array of cells [cell0, cell1, ...]
   if (Array.isArray(raw)) {
-    if (headerMap && Object.keys(headerMap).length > 0) {
-      // Map using dynamic header indexes
+    // Only trust headerMap if it contains actual meaningful header labels (not just 'a', 'b', 'c' from Google col.id)
+    const validHeaderEntries = headerMap
+      ? Object.entries(headerMap).filter(([k]) => k.length > 1 && !/^[a-z]$/.test(k))
+      : [];
+
+    if (validHeaderEntries.length > 0) {
       const getByHeaderKey = (keywords: string[]): string => {
         for (const kw of keywords) {
-          for (const [cleanH, colIdx] of Object.entries(headerMap)) {
-            if (cleanH.includes(kw)) {
+          for (const [cleanH, colIdx] of validHeaderEntries) {
+            if (cleanH === kw || cleanH.includes(kw)) {
               const val = raw[colIdx];
               if (val != null && String(val).trim() !== '') {
                 return String(val).trim();
@@ -65,46 +96,81 @@ export function normalizeRecord(raw: any, index: number, headerMap?: Record<stri
         return '';
       };
 
-      record.stt = getByHeaderKey(['stt', 'sott']) || String(raw[0] ?? index + 1).trim();
-      record.soHoSo = getByHeaderKey(['sohoso', 'mahoso', 'shs']);
-      record.quyTrinh = getByHeaderKey(['quytrinh', 'thutuc', 'tentrutuc']);
-      record.boPhanHienTai = getByHeaderKey(['bophanhientai', 'bophan', 'phongban']);
-      record.menuHienTai = getByHeaderKey(['menuhientai', 'menu', 'buocxuly', 'trangthaixuly']);
-      record.tenDonVi = getByHeaderKey(['tendonvi', 'hoten', 'chuhoso', 'nguoinop']);
-      record.coQuanXuLy = getByHeaderKey(['coquan', 'donvixuly']);
-      record.canBoXuLy = getByHeaderKey(['canbo', 'nguoixuly']);
-      record.ngayNhan = getByHeaderKey(['ngaynhan', 'tiepnhan']);
-      record.ngayTra = getByHeaderKey(['hantra', 'ngayhen', 'ngaytra']);
-      record.traThucTe = getByHeaderKey(['trathucte', 'ngaytrathucte', 'thucte']);
-      return record;
+      record.stt = getByHeaderKey(HEADER_KEYWORDS.stt) || String(raw[0] ?? index + 1).trim();
+      record.soHoSo = getByHeaderKey(HEADER_KEYWORDS.soHoSo);
+      record.quyTrinh = getByHeaderKey(HEADER_KEYWORDS.quyTrinh);
+      record.boPhanHienTai = getByHeaderKey(HEADER_KEYWORDS.boPhanHienTai);
+      record.menuHienTai = getByHeaderKey(HEADER_KEYWORDS.menuHienTai);
+      record.tenDonVi = getByHeaderKey(HEADER_KEYWORDS.tenDonVi);
+
+      // Distinguish coQuan vs canBo
+      const coQuanVal = getByHeaderKey(HEADER_KEYWORDS.coQuanXuLy);
+      let canBoVal = '';
+      for (const kw of HEADER_KEYWORDS.canBoXuLy) {
+        for (const [cleanH, colIdx] of validHeaderEntries) {
+          // If this column is dedicated to canbo and doesn't mention coquan
+          if ((cleanH === kw || cleanH.includes(kw)) && !cleanH.includes('coquan')) {
+            const val = raw[colIdx];
+            if (val != null && String(val).trim() !== '') {
+              canBoVal = String(val).trim();
+              break;
+            }
+          }
+        }
+        if (canBoVal) break;
+      }
+
+      record.coQuanXuLy = coQuanVal;
+      record.canBoXuLy = canBoVal;
+      record.ngayNhan = getByHeaderKey(HEADER_KEYWORDS.ngayNhan);
+      record.ngayTra = getByHeaderKey(HEADER_KEYWORDS.ngayTra);
+      record.traThucTe = getByHeaderKey(HEADER_KEYWORDS.traThucTe);
     }
 
-    // Fallback if no header map: detect column positions by pattern
-    record.stt = String(raw[0] ?? index + 1).trim();
-    record.soHoSo = String(raw[1] ?? '').trim();
-    record.quyTrinh = String(raw[2] ?? '').trim();
+    // Safety Fallback for any fields still empty (positional and pattern recognition)
+    if (!record.stt) record.stt = String(raw[0] ?? index + 1).trim();
+    if (!record.soHoSo && raw[1] != null && String(raw[1]).trim()) record.soHoSo = String(raw[1]).trim();
+    if (!record.quyTrinh && raw[2] != null && String(raw[2]).trim()) record.quyTrinh = String(raw[2]).trim();
 
-    // If 11 or more columns, check if raw[3] or raw[9] looks like boPhan
-    if (raw.length >= 11) {
-      // If col 9 and 10 exist, check if col 3 is boPhan or tenDonVi
-      record.boPhanHienTai = String(raw[3] ?? '').trim();
-      record.menuHienTai = String(raw[4] ?? '').trim();
-      record.tenDonVi = String(raw[5] ?? '').trim();
-      record.coQuanXuLy = String(raw[6] ?? '').trim();
-      record.canBoXuLy = String(raw[7] ?? '').trim();
-      record.ngayNhan = String(raw[8] ?? '').trim();
-      record.ngayTra = String(raw[9] ?? '').trim();
-      record.traThucTe = String(raw[10] ?? '').trim();
+    if (raw.length >= 10) {
+      if (!record.boPhanHienTai && raw[3] != null) record.boPhanHienTai = String(raw[3]).trim();
+      if (!record.menuHienTai && raw[4] != null) record.menuHienTai = String(raw[4]).trim();
+      if (!record.tenDonVi && raw[5] != null) record.tenDonVi = String(raw[5]).trim();
+      if (!record.coQuanXuLy && raw[6] != null) record.coQuanXuLy = String(raw[6]).trim();
+      if (raw.length >= 11) {
+        if (!record.canBoXuLy && raw[7] != null) record.canBoXuLy = String(raw[7]).trim();
+        if (!record.ngayNhan && raw[8] != null) record.ngayNhan = String(raw[8]).trim();
+        if (!record.ngayTra && raw[9] != null) record.ngayTra = String(raw[9]).trim();
+        if (!record.traThucTe && raw[10] != null) record.traThucTe = String(raw[10]).trim();
+      } else {
+        if (!record.ngayNhan && raw[7] != null) record.ngayNhan = String(raw[7]).trim();
+        if (!record.ngayTra && raw[8] != null) record.ngayTra = String(raw[8]).trim();
+        if (!record.traThucTe && raw[9] != null) record.traThucTe = String(raw[9]).trim();
+      }
     } else {
-      record.tenDonVi = String(raw[3] ?? '').trim();
-      record.coQuanXuLy = String(raw[4] ?? '').trim();
-      record.canBoXuLy = String(raw[5] ?? '').trim();
-      record.ngayNhan = String(raw[6] ?? '').trim();
-      record.ngayTra = String(raw[7] ?? '').trim();
-      record.traThucTe = String(raw[8] ?? '').trim();
-      record.boPhanHienTai = String(raw[9] ?? '').trim();
-      record.menuHienTai = String(raw[10] ?? '').trim();
+      if (!record.tenDonVi && raw[3] != null) record.tenDonVi = String(raw[3]).trim();
+      if (!record.coQuanXuLy && raw[4] != null) record.coQuanXuLy = String(raw[4]).trim();
+      if (!record.ngayNhan && raw[5] != null) record.ngayNhan = String(raw[5]).trim();
+      if (!record.ngayTra && raw[6] != null) record.ngayTra = String(raw[6]).trim();
     }
+
+    // Date Pattern Fallback: if ngayTra is still empty, scan raw row cells for dates!
+    if (!record.ngayTra || !record.ngayNhan) {
+      const dateCells: string[] = [];
+      for (let c = 1; c < raw.length; c++) {
+        const valStr = String(raw[c] || '').trim();
+        if (/\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}/.test(valStr)) {
+          dateCells.push(valStr);
+        }
+      }
+      if (dateCells.length >= 2) {
+        if (!record.ngayNhan) record.ngayNhan = dateCells[0];
+        if (!record.ngayTra) record.ngayTra = dateCells[1];
+      } else if (dateCells.length === 1 && !record.ngayTra) {
+        record.ngayTra = dateCells[0];
+      }
+    }
+
     return record;
   }
 
@@ -120,43 +186,18 @@ export function normalizeRecord(raw: any, index: number, headerMap?: Record<stri
       const val = raw[key] != null ? String(raw[key]).trim() : '';
       if (!val) continue;
 
-      if (
-        (k.includes('bophanhientai') ||
-          k.includes('bophan') ||
-          k.includes('phongban') ||
-          k.includes('bphientai') ||
-          (k.includes('bp') && k.includes('hientai'))) &&
-        !record.boPhanHienTai
-      ) {
-        record.boPhanHienTai = val;
-      } else if (
-        (k.includes('menuhientai') ||
-          k.includes('menu') ||
-          k.includes('buocxuly') ||
-          k.includes('mnhientai') ||
-          (k.includes('mn') && k.includes('hientai'))) &&
-        !record.menuHienTai
-      ) {
-        record.menuHienTai = val;
-      } else if ((k.includes('sohoso') || k.includes('mahoso') || k === 'shs') && !record.soHoSo) {
-        record.soHoSo = val;
-      } else if ((k.includes('quytrinh') || k.includes('thutuc')) && !record.quyTrinh) {
-        record.quyTrinh = val;
-      } else if ((k.includes('tendonvi') || k.includes('hoten') || k.includes('chuhoso') || k.includes('nguoinop')) && !record.tenDonVi) {
-        record.tenDonVi = val;
-      } else if ((k.includes('coquan') || k.includes('donvixuly')) && !record.coQuanXuLy) {
-        record.coQuanXuLy = val;
-      } else if ((k.includes('canbo') || k.includes('nguoixuly')) && !record.canBoXuLy) {
-        record.canBoXuLy = val;
-      } else if ((k.includes('ngaynhan') || k.includes('tiepnhan')) && !record.ngayNhan) {
-        record.ngayNhan = val;
-      } else if ((k.includes('hantra') || k.includes('ngayhen') || (k.includes('ngaytra') && !k.includes('thucte'))) && !record.ngayTra) {
-        record.ngayTra = val;
-      } else if ((k.includes('trathucte') || k.includes('thucte')) && !record.traThucTe) {
-        record.traThucTe = val;
-      } else if (k === 'stt' && !record.stt) {
-        record.stt = val;
-      }
+      const matched = matchFieldFromCleanHeader(k);
+      if (matched === 'boPhanHienTai' && !record.boPhanHienTai) record.boPhanHienTai = val;
+      else if (matched === 'menuHienTai' && !record.menuHienTai) record.menuHienTai = val;
+      else if (matched === 'soHoSo' && !record.soHoSo) record.soHoSo = val;
+      else if (matched === 'quyTrinh' && !record.quyTrinh) record.quyTrinh = val;
+      else if (matched === 'tenDonVi' && !record.tenDonVi) record.tenDonVi = val;
+      else if (matched === 'coQuanXuLy' && !record.coQuanXuLy) record.coQuanXuLy = val;
+      else if (matched === 'canBoXuLy' && !record.canBoXuLy) record.canBoXuLy = val;
+      else if (matched === 'ngayNhan' && !record.ngayNhan) record.ngayNhan = val;
+      else if (matched === 'ngayTra' && !record.ngayTra) record.ngayTra = val;
+      else if (matched === 'traThucTe' && !record.traThucTe) record.traThucTe = val;
+      else if (k === 'stt' && !record.stt) record.stt = val;
     }
   }
 
@@ -436,42 +477,109 @@ export async function fetchProxyGvizOrCsv(sheetId: string, gidParam: string = ''
   throw new Error('Không thể tải qua proxy');
 }
 
+// Safely format cell values from Google Visualization API or 2D matrices
+export function formatGvizCellValue(cell: any): string {
+  if (cell == null) return '';
+  if (typeof cell === 'string' || typeof cell === 'number' || typeof cell === 'boolean') {
+    return String(cell).trim();
+  }
+  // cell is an object { v: ..., f: ... }
+  if (cell.f != null && String(cell.f).trim() !== '') {
+    return String(cell.f).trim();
+  }
+  if (cell.v != null) {
+    const v = String(cell.v).trim();
+    // Google GViz Date format: Date(year, monthIndex, day, hours, minutes, seconds)
+    const match = v.match(/Date\((\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*(\d+))?(?:\s*,\s*(\d+))?(?:\s*,\s*(\d+))?\)/);
+    if (match) {
+      const year = match[1];
+      const month = String(Number(match[2]) + 1).padStart(2, '0');
+      const day = String(Number(match[3])).padStart(2, '0');
+      const hour = match[4] ? String(Number(match[4])).padStart(2, '0') : '';
+      const min = match[5] ? String(Number(match[5])).padStart(2, '0') : '';
+      if (hour && min) {
+        return `${day}/${month}/${year} ${hour}:${min}`;
+      }
+      return `${day}/${month}/${year}`;
+    }
+    return v;
+  }
+  return '';
+}
+
+// Scans the first few rows to locate the real header row and map all columns
+export function detectHeaderRow(raw2D: any[][]): {
+  headerRowIdx: number;
+  colMap: Record<string, number>;
+  matchedCount: number;
+} {
+  let bestRowIdx = -1;
+  let bestColMap: Record<string, number> = {};
+  let bestScore = 0;
+
+  const maxScan = Math.min(raw2D.length, 10);
+  for (let r = 0; r < maxScan; r++) {
+    const row = raw2D[r];
+    if (!Array.isArray(row)) continue;
+
+    const currentMap: Record<string, number> = {};
+    const matchedFields = new Set<string>();
+
+    row.forEach((cellVal: any, colIdx: number) => {
+      const strVal = String(cellVal || '').trim();
+      const clean = cleanKey(strVal);
+      if (!clean) return;
+
+      currentMap[clean] = colIdx;
+      const matchedField = matchFieldFromCleanHeader(clean);
+      if (matchedField) {
+        matchedFields.add(matchedField);
+        if (currentMap[matchedField] === undefined) {
+          currentMap[matchedField] = colIdx;
+        }
+      }
+    });
+
+    const score = matchedFields.size;
+    if (score > bestScore) {
+      bestScore = score;
+      bestRowIdx = r;
+      bestColMap = currentMap;
+    }
+  }
+
+  return {
+    headerRowIdx: bestRowIdx,
+    colMap: bestColMap,
+    matchedCount: bestScore,
+  };
+}
+
 // Convert 2D array matrix into SheetRecord[]
 export function parse2DArrayRecords(rawList: any[][]): { records: SheetRecord[]; sheetName: string } {
   let headerMap: Record<string, number> = {};
   let dataRows = rawList;
 
   if (rawList.length > 0 && Array.isArray(rawList[0])) {
-    let headerRowIdx = -1;
-    for (let r = 0; r < Math.min(rawList.length, 5); r++) {
-      const row = rawList[r];
-      if (!Array.isArray(row)) continue;
-      const keys = row.map((cell: any) => cleanKey(String(cell)));
-      const matchCount = keys.filter((k: string) =>
-        ['stt', 'sohoso', 'mahoso', 'shs', 'quytrinh', 'thutuc', 'bophan', 'menu', 'hantra', 'ngaynhan', 'tendonvi', 'canbo', 'coquan', 'trathucte'].some(
-          (term) => k.includes(term)
-        )
-      ).length;
-
-      if (matchCount >= 2) {
-        headerRowIdx = r;
-        headerMap = {};
-        keys.forEach((k: string, idx: number) => {
-          if (k) headerMap[k] = idx;
-        });
-        break;
+    const detected = detectHeaderRow(rawList);
+    if (detected.headerRowIdx >= 0) {
+      headerMap = detected.colMap;
+      dataRows = rawList.slice(detected.headerRowIdx + 1);
+    } else {
+      const firstCell = String(rawList[0][0] || '').trim();
+      if (firstCell && (cleanKey(firstCell) === 'stt' || isNaN(Number(firstCell)))) {
+        dataRows = rawList.slice(1);
       }
-    }
-
-    if (headerRowIdx >= 0) {
-      dataRows = rawList.slice(headerRowIdx + 1);
     }
   }
 
-  // Filter out blank rows
+  // Filter out blank rows and any remaining header row text
   dataRows = dataRows.filter((row: any) => {
     if (!row) return false;
     if (Array.isArray(row)) {
+      const c0 = cleanKey(String(row[0] || ''));
+      const c1 = cleanKey(String(row[1] || ''));
+      if (c0 === 'stt' || c1 === 'sohoso' || c1 === 'mahoso' || c1 === 'shs') return false;
       return row.some((cell: any) => cell != null && String(cell).trim() !== '');
     }
     return Object.values(row).some((val: any) => val != null && String(val).trim() !== '');
@@ -517,37 +625,58 @@ export function parseGvizResponse(rawTextOrJson: any): { records: SheetRecord[];
   const cols = json.table?.cols || [];
   const rows = json.table?.rows || [];
 
-  const headerMap: Record<string, number> = {};
-  cols.forEach((col: any, idx: number) => {
-    const label = cleanKey(col.label || col.id || '');
-    if (label) headerMap[label] = idx;
-  });
-
+  // 1. Build 2D matrix of clean, formatted values
   const raw2D: any[][] = [];
   rows.forEach((r: any) => {
-    const rowVals = (r.c || []).map((cell: any) => (cell ? cell.f || (cell.v != null ? String(cell.v) : '') : ''));
+    const rowVals = (r.c || []).map((cell: any) => formatGvizCellValue(cell));
     raw2D.push(rowVals);
   });
 
-  let dataRows = raw2D;
-  if (Object.keys(headerMap).length < 3 && raw2D.length > 0) {
-    for (let i = 0; i < Math.min(raw2D.length, 5); i++) {
-      const keys = raw2D[i].map((c: any) => cleanKey(String(c)));
-      const matches = keys.filter((k: string) =>
-        ['stt', 'sohoso', 'mahoso', 'shs', 'quytrinh', 'thutuc', 'bophan', 'menu', 'hantra', 'ngaynhan', 'tendonvi', 'canbo', 'coquan', 'trathucte'].some(t => k.includes(t))
-      ).length;
-      if (matches >= 2) {
-        keys.forEach((k: string, cIdx: number) => {
-          if (k) headerMap[k] = cIdx;
-        });
-        dataRows = raw2D.slice(i + 1);
-        break;
+  // 2. Check if cols has real meaningful header labels (not just empty or 'A', 'B')
+  const colsHeaderMap: Record<string, number> = {};
+  let colsHasRealHeaders = false;
+  cols.forEach((col: any, idx: number) => {
+    if (col && col.label && String(col.label).trim()) {
+      const clean = cleanKey(String(col.label));
+      if (clean && clean.length > 1 && !/^[a-z]$/.test(clean)) {
+        colsHeaderMap[clean] = idx;
+        const matchedField = matchFieldFromCleanHeader(clean);
+        if (matchedField) {
+          colsHeaderMap[matchedField] = idx;
+          colsHasRealHeaders = true;
+        }
+      }
+    }
+  });
+
+  let headerMap: Record<string, number> = {};
+  let dataRows: any[][] = raw2D;
+
+  if (colsHasRealHeaders && Object.keys(colsHeaderMap).length >= 2) {
+    headerMap = colsHeaderMap;
+  } else {
+    // Scan raw2D for the actual header row
+    const detected = detectHeaderRow(raw2D);
+    if (detected.headerRowIdx >= 0) {
+      headerMap = detected.colMap;
+      dataRows = raw2D.slice(detected.headerRowIdx + 1);
+    } else if (raw2D.length > 0) {
+      // If row 0 cell 0 is non-numeric, assume row 0 is header
+      const firstCell = String(raw2D[0][0] || '').trim();
+      if (firstCell && (cleanKey(firstCell) === 'stt' || isNaN(Number(firstCell)))) {
+        dataRows = raw2D.slice(1);
       }
     }
   }
 
-  // Filter out blank rows
-  dataRows = dataRows.filter((r) => r.some((c: any) => c && String(c).trim() !== ''));
+  // 3. Filter out blank rows and any lingering header rows
+  dataRows = dataRows.filter((r) => {
+    if (!r || !Array.isArray(r)) return false;
+    const c0 = cleanKey(String(r[0] || ''));
+    const c1 = cleanKey(String(r[1] || ''));
+    if (c0 === 'stt' || c1 === 'sohoso' || c1 === 'mahoso' || c1 === 'shs') return false;
+    return r.some((c: any) => c != null && String(c).trim() !== '');
+  });
 
   const overrides = getCompletedOverrides();
   const records = dataRows.map((item, idx) => {
