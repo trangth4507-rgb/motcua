@@ -1,3 +1,5 @@
+import { isValidCompletedTimestamp } from './dateUtils';
+
 export interface SheetRecord {
   rowIndex: number;
   stt: string;
@@ -40,7 +42,7 @@ export const HEADER_KEYWORDS: Record<string, string[]> = {
   canBoXuLy: ['canbo', 'nguoixuly', 'canbothuly', 'chuyenvien', 'nguoithuchien', 'canboxuly', 'cbtl', 'cbxl', 'chuyenvienthuly'],
   ngayNhan: ['ngaynhan', 'tiepnhan', 'ngaytiepnhan', 'thoigiannhan', 'ngayvao', 'ngaynophoso', 'ngaynop', 'thoigiantiepnhan'],
   ngayTra: ['hantra', 'ngayhen', 'ngaytra', 'hangiaiquyet', 'ngayhentra', 'hanchot', 'thoigianhantra', 'thoigianhen', 'denngay', 'hanchotxuly', 'thoigiangiaiquyet', 'hentra'],
-  traThucTe: ['trathucte', 'ngaytrathucte', 'thucte', 'ngayhoanthanh', 'ngaytrakq', 'ngayketthuc', 'daxuly', 'ngayxuly', 'thoigiantra', 'ngaychitra'],
+  traThucTe: ['trathucte', 'ngaytrathucte', 'thoigiantrathucte', 'ngaytraketqua', 'ngayhoanthanh', 'ngaytrakq'],
 };
 
 export function matchFieldFromCleanHeader(cleanHeader: string): string | null {
@@ -124,7 +126,8 @@ export function normalizeRecord(raw: any, index: number, headerMap?: Record<stri
       record.canBoXuLy = canBoVal;
       record.ngayNhan = getByHeaderKey(HEADER_KEYWORDS.ngayNhan);
       record.ngayTra = getByHeaderKey(HEADER_KEYWORDS.ngayTra);
-      record.traThucTe = getByHeaderKey(HEADER_KEYWORDS.traThucTe);
+      const rawTra = getByHeaderKey(HEADER_KEYWORDS.traThucTe);
+      record.traThucTe = isValidCompletedTimestamp(rawTra) ? rawTra : '';
     }
 
     // Safety Fallback for any fields still empty (positional and pattern recognition)
@@ -141,11 +144,10 @@ export function normalizeRecord(raw: any, index: number, headerMap?: Record<stri
         if (!record.canBoXuLy && raw[7] != null) record.canBoXuLy = String(raw[7]).trim();
         if (!record.ngayNhan && raw[8] != null) record.ngayNhan = String(raw[8]).trim();
         if (!record.ngayTra && raw[9] != null) record.ngayTra = String(raw[9]).trim();
-        if (!record.traThucTe && raw[10] != null) record.traThucTe = String(raw[10]).trim();
+        // KHÔNG BAO GIỜ gán bừa raw[10] vào traThucTe vì raw[10] có thể là tên cơ quan/đơn vị
       } else {
         if (!record.ngayNhan && raw[7] != null) record.ngayNhan = String(raw[7]).trim();
         if (!record.ngayTra && raw[8] != null) record.ngayTra = String(raw[8]).trim();
-        if (!record.traThucTe && raw[9] != null) record.traThucTe = String(raw[9]).trim();
       }
     } else {
       if (!record.tenDonVi && raw[3] != null) record.tenDonVi = String(raw[3]).trim();
@@ -169,6 +171,11 @@ export function normalizeRecord(raw: any, index: number, headerMap?: Record<stri
       } else if (dateCells.length === 1 && !record.ngayTra) {
         record.ngayTra = dateCells[0];
       }
+    }
+
+    // Đảm bảo traThucTe chỉ có giá trị khi đúng chuẩn ngày giờ
+    if (record.traThucTe && !isValidCompletedTimestamp(record.traThucTe)) {
+      record.traThucTe = '';
     }
 
     return record;
@@ -196,7 +203,11 @@ export function normalizeRecord(raw: any, index: number, headerMap?: Record<stri
       else if (matched === 'canBoXuLy' && !record.canBoXuLy) record.canBoXuLy = val;
       else if (matched === 'ngayNhan' && !record.ngayNhan) record.ngayNhan = val;
       else if (matched === 'ngayTra' && !record.ngayTra) record.ngayTra = val;
-      else if (matched === 'traThucTe' && !record.traThucTe) record.traThucTe = val;
+      else if (matched === 'traThucTe' && !record.traThucTe) {
+        if (isValidCompletedTimestamp(val)) {
+          record.traThucTe = val;
+        }
+      }
       else if (k === 'stt' && !record.stt) record.stt = val;
     }
 
@@ -257,7 +268,15 @@ const COMPLETED_STORAGE_KEY = 'deadline_completed_overrides';
 export function getCompletedOverrides(): Record<string, string> {
   try {
     const raw = localStorage.getItem(COMPLETED_STORAGE_KEY);
-    return raw ? JSON.parse(raw) : {};
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    const sanitized: Record<string, string> = {};
+    for (const [k, v] of Object.entries(parsed)) {
+      if (isValidCompletedTimestamp(v)) {
+        sanitized[k] = String(v);
+      }
+    }
+    return sanitized;
   } catch {
     return {};
   }
@@ -623,9 +642,12 @@ export function parse2DArrayRecords(rawList: any[][]): { records: SheetRecord[];
       const localTimestamp =
         (rec.soHoSo ? overrides[`shs_${rec.soHoSo.trim()}`] : undefined) ||
         overrides[key];
-      if (localTimestamp) {
+      if (localTimestamp && isValidCompletedTimestamp(localTimestamp)) {
         rec.traThucTe = localTimestamp;
       }
+    }
+    if (rec.traThucTe && !isValidCompletedTimestamp(rec.traThucTe)) {
+      rec.traThucTe = '';
     }
     return rec;
   });
@@ -715,9 +737,12 @@ export function parseGvizResponse(rawTextOrJson: any): { records: SheetRecord[];
       const localTimestamp =
         (rec.soHoSo ? overrides[`shs_${rec.soHoSo.trim()}`] : undefined) ||
         overrides[key];
-      if (localTimestamp) {
+      if (localTimestamp && isValidCompletedTimestamp(localTimestamp)) {
         rec.traThucTe = localTimestamp;
       }
+    }
+    if (rec.traThucTe && !isValidCompletedTimestamp(rec.traThucTe)) {
+      rec.traThucTe = '';
     }
     return rec;
   });
@@ -1015,9 +1040,12 @@ export async function fetchSheetData(
         const localTimestamp =
           (rec.soHoSo ? overrides[`shs_${rec.soHoSo.trim()}`] : undefined) ||
           overrides[key];
-        if (localTimestamp) {
+        if (localTimestamp && isValidCompletedTimestamp(localTimestamp)) {
           rec.traThucTe = localTimestamp;
         }
+      }
+      if (rec.traThucTe && !isValidCompletedTimestamp(rec.traThucTe)) {
+        rec.traThucTe = '';
       }
       return rec;
     });

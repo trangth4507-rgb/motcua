@@ -15,6 +15,7 @@ import {
   formatTimeRemaining,
   getWarningStatus,
   getCurrentDateStr,
+  isValidCompletedTimestamp,
 } from '../lib/dateUtils';
 import { cn } from '../lib/utils';
 import {
@@ -165,11 +166,16 @@ export function RecordTable({
         const overrideTimestamp =
           (record.soHoSo ? localCompletedMap[`shs_${record.soHoSo.trim()}`] : undefined) ||
           localCompletedMap[recKey];
-        const traThucTe = (record.traThucTe && record.traThucTe.trim().length > 0)
-          ? record.traThucTe
-          : (overrideTimestamp || '');
+
+        let traThucTe = '';
+        if (isValidCompletedTimestamp(record.traThucTe)) {
+          traThucTe = record.traThucTe;
+        } else if (isValidCompletedTimestamp(overrideTimestamp)) {
+          traThucTe = overrideTimestamp;
+        }
+
         const traThucTeDate = parseDate(traThucTe);
-        const isCompleted = !!traThucTe && traThucTe.trim().length > 0;
+        const isCompleted = isValidCompletedTimestamp(traThucTe);
 
         const referenceDate = isCompleted ? traThucTeDate || now : now;
         const tr = calculateTimeRemaining(ngayTraDate, referenceDate);
@@ -1209,16 +1215,14 @@ export function RecordTable({
                           key={record.rowIndex}
                           className="bg-emerald-50/30 hover:bg-emerald-50/60 transition-colors text-slate-600"
                         >
-                          {/* Checkbox column: Shows green checkmark, clicking allows undo */}
+                          {/* Cột trạng thái: Hiển thị biểu tượng đã hoàn thành */}
                           <td className={cn(cellPadding, 'text-center')}>
-                            <button
-                              type="button"
-                              onClick={() => handleUndoComplete(record)}
-                              className="w-5 h-5 rounded bg-emerald-600 text-white inline-flex items-center justify-center hover:bg-emerald-700 transition-colors cursor-pointer"
-                              title="Hồ sơ đã hoàn thành. Bấm vào đây để Hoàn tác (chuyển lại lên trên)"
+                            <div
+                              className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-700 mx-auto flex items-center justify-center text-xs font-bold border border-emerald-300"
+                              title="Hồ sơ đã xử lý xong (Bấm nút 'Hoàn tác' ở cột cuối để chuyển lại lên trên nếu cần)"
                             >
-                              <Check className="w-3.5 h-3.5" />
-                            </button>
+                              ✓
+                            </div>
                           </td>
 
                           {/* STT */}

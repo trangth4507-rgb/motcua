@@ -46,6 +46,18 @@ export function parseDate(dateStr: string | number | null | undefined): Date | n
   return null;
 }
 
+export function isValidCompletedTimestamp(dateStr: any): boolean {
+  if (dateStr == null) return false;
+  const s = String(dateStr).trim();
+  if (!s || s === '-' || s === '--' || s.toLowerCase() === 'chưa trả' || s.toLowerCase() === 'chua tra') {
+    return false;
+  }
+  // Must have at least some digits
+  if (!/\d/.test(s)) return false;
+  const parsed = parseDate(s);
+  return parsed !== null && !isNaN(parsed.getTime());
+}
+
 const DEFAULT_DATE_FORMAT = 'dd/MM/yyyy HH:mm';
 
 export function getCurrentDateStr(): string {

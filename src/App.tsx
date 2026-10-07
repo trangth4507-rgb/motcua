@@ -33,7 +33,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { cn } from './lib/utils';
-import { parseDate, calculateTimeRemaining } from './lib/dateUtils';
+import { parseDate, calculateTimeRemaining, isValidCompletedTimestamp } from './lib/dateUtils';
 
 export default function App() {
   const [webAppUrl, setWebAppUrl] = useState(() => {
@@ -275,7 +275,7 @@ export default function App() {
     let completed = 0;
 
     records.forEach((r) => {
-      const isCompleted = !!r.traThucTe && r.traThucTe.trim().length > 0;
+      const isCompleted = isValidCompletedTimestamp(r.traThucTe);
       if (isCompleted) {
         completed++;
       } else {
