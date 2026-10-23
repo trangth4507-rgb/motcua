@@ -8,44 +8,37 @@ import {
   FileSpreadsheet,
   LogIn,
   AlertCircle,
-  KeyRound,
-  CheckCircle2,
 } from 'lucide-react';
-import { authenticate, AuthUser, DEFAULT_ADMIN_USERNAME, DEFAULT_ADMIN_PASSWORD } from '../lib/auth';
+import { authenticate, AuthUser } from '../lib/auth';
 
 interface LoginScreenProps {
   onLoginSuccess: (user: AuthUser) => void;
 }
 
 export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
-  const [username, setUsername] = useState(DEFAULT_ADMIN_USERNAME);
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isLoading) return;
     setError(null);
     setIsLoading(true);
 
-    setTimeout(() => {
-      const result = authenticate(username, password);
-      setIsLoading(false);
+    const result = await authenticate(username, password, rememberMe);
+    setIsLoading(false);
 
-      if (result.success && result.user) {
-        onLoginSuccess(result.user);
-      } else {
-        setError(result.message || 'Tên đăng nhập hoặc mật khẩu không chính xác');
-      }
-    }, 250);
-  };
-
-  const handleFillDemo = () => {
-    setUsername(DEFAULT_ADMIN_USERNAME);
-    setPassword(DEFAULT_ADMIN_PASSWORD);
-    setError(null);
+    if (result.success && result.user) {
+      setPassword('');
+      onLoginSuccess(result.user);
+    } else {
+      setPassword('');
+      setError(result.message || 'Tên đăng nhập hoặc mật khẩu không chính xác');
+    }
   };
 
   return (
@@ -102,7 +95,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                   required
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  placeholder="Nhập tên đăng nhập (ví dụ: Admin)..."
+                  placeholder="Nhập tên đăng nhập..."
+                  autoComplete="username"
+                  autoFocus
                   className="w-full pl-10 pr-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 font-medium transition-all"
                 />
               </div>
@@ -110,23 +105,12 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
 
             {/* Password Input */}
             <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <label
-                  htmlFor="password"
-                  className="block text-xs font-semibold text-slate-700 uppercase tracking-wider"
-                >
-                  Mật khẩu
-                </label>
-                <button
-                  type="button"
-                  onClick={handleFillDemo}
-                  className="text-[11px] text-emerald-700 hover:text-emerald-800 font-semibold cursor-pointer hover:underline flex items-center gap-1"
-                  title="Điền tự động mật khẩu mặc định: dcmvss"
-                >
-                  <KeyRound className="w-3 h-3" />
-                  <span>Điền mật khẩu mẫu</span>
-                </button>
-              </div>
+              <label
+                htmlFor="password"
+                className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5"
+              >
+                Mật khẩu
+              </label>
               <div className="relative rounded-lg shadow-2xs">
                 <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
                   <Lock className="w-4 h-4" />
@@ -138,6 +122,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="Nhập mật khẩu..."
+                  autoComplete="current-password"
                   className="w-full pl-10 pr-10 py-2.5 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 font-mono transition-all"
                 />
                 <button
@@ -184,16 +169,12 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
             </button>
           </form>
 
-          {/* Credentials Helper Note */}
-          <div className="mt-6 pt-5 border-t border-slate-100 bg-slate-50 -mx-6 -mb-8 px-6 py-4 rounded-b-2xl text-xs text-slate-600">
-            <div className="flex items-center gap-1.5 font-bold text-slate-800 mb-1">
-              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-              <span>Thông tin tài khoản quản trị:</span>
-            </div>
-            <div className="space-y-0.5 text-slate-600 font-mono text-[11px]">
-              <div>• Tên đăng nhập: <strong className="text-slate-900 font-bold">Admin</strong></div>
-              <div>• Mật khẩu: <strong className="text-emerald-700 font-bold bg-emerald-100/70 px-1.5 py-0.5 rounded">dcmvss</strong></div>
-            </div>
+          {/* Security note */}
+          <div className="mt-6 pt-4 border-t border-slate-100 bg-slate-50 -mx-6 sm:-mx-10 -mb-8 px-6 sm:px-10 py-4 rounded-b-2xl text-[11px] text-slate-500 flex items-start gap-2">
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
+            <span>
+              Mật khẩu được kiểm tra trên máy chủ. Nếu quên mật khẩu, người quản lý dự án Vercel có thể đặt lại.
+            </span>
           </div>
         </div>
       </div>

@@ -5,99 +5,79 @@ export interface AuthUser {
   loggedInAt: string;
 }
 
-const AUTH_USER_KEY = 'deadline_auth_user';
-const ADMIN_PASSWORD_KEY = 'deadline_admin_password';
-export const DEFAULT_ADMIN_USERNAME = 'Admin';
-export const DEFAULT_ADMIN_PASSWORD = 'dcmvss';
+const AUTH_ENDPOINT = '/api/auth';
 
-export function getStoredAdminPassword(): string {
+/** Trang quản lý biến môi trường của dự án trên Vercel (nơi đặt/đổi mật khẩu Admin). */
+export const VERCEL_ENV_SETTINGS_URL =
+  'https://vercel.com/trangth4508s-projects/motcua/settings/environment-variables';
+
+// Khóa cũ từ phiên bản lưu mật khẩu trong trình duyệt — xóa đi để không còn dấu vết.
+function clearLegacyStorage() {
   try {
-    return localStorage.getItem(ADMIN_PASSWORD_KEY) || DEFAULT_ADMIN_PASSWORD;
+    localStorage.removeItem('deadline_auth_user');
+    localStorage.removeItem('deadline_admin_password');
   } catch {
-    return DEFAULT_ADMIN_PASSWORD;
+    /* bỏ qua */
   }
 }
 
-export function getCurrentUser(): AuthUser | null {
+async function parseJson(res: Response): Promise<any> {
   try {
-    const raw = localStorage.getItem(AUTH_USER_KEY);
-    if (!raw) return null;
-    return JSON.parse(raw);
+    return await res.json();
+  } catch {
+    return {};
+  }
+}
+
+/** Hỏi máy chủ xem trình duyệt này đang có phiên đăng nhập hợp lệ không. */
+export async function fetchSession(): Promise<AuthUser | null> {
+  clearLegacyStorage();
+  try {
+    const res = await fetch(`${AUTH_ENDPOINT}?action=session`, {
+      credentials: 'same-origin',
+      cache: 'no-store',
+    });
+    if (!res.ok) return null;
+    const data = await parseJson(res);
+    return data.ok && data.user ? (data.user as AuthUser) : null;
   } catch {
     return null;
   }
 }
 
-export function isAuthenticated(): boolean {
-  return getCurrentUser() !== null;
-}
-
-export function authenticate(usernameInput: string, passwordInput: string): { success: boolean; message?: string; user?: AuthUser } {
-  const cleanUser = (usernameInput || '').trim();
-  const cleanPass = (passwordInput || '').trim();
-
-  if (!cleanUser) {
-    return { success: false, message: 'Vui lòng nhập tên đăng nhập' };
-  }
-  if (!cleanPass) {
-    return { success: false, message: 'Vui lòng nhập mật khẩu' };
-  }
-
-  const expectedPass = getStoredAdminPassword();
-
-  // Accept Admin or admin
-  const isUsernameMatch = cleanUser.toLowerCase() === DEFAULT_ADMIN_USERNAME.toLowerCase();
-  const isPasswordMatch = cleanPass === expectedPass;
-
-  if (!isUsernameMatch || !isPasswordMatch) {
-    return { success: false, message: 'Tên đăng nhập hoặc mật khẩu không chính xác' };
-  }
-
-  const user: AuthUser = {
-    username: DEFAULT_ADMIN_USERNAME,
-    fullName: 'Quản trị viên Hệ thống',
-    role: 'Quản trị viên (Admin)',
-    loggedInAt: new Date().toISOString(),
-  };
+export async function authenticate(
+  username: string,
+  password: string,
+  remember: boolean
+): Promise<{ success: boolean; message?: string; user?: AuthUser }> {
+  if (!username.trim()) return { success: false, message: 'Vui lòng nhập tên đăng nhập' };
+  if (!password) return { success: false, message: 'Vui lòng nhập mật khẩu' };
 
   try {
-    localStorage.setItem(AUTH_USER_KEY, JSON.stringify(user));
-  } catch (e) {
-    console.warn('Failed to save auth to localStorage:', e);
+    const res = await fetch(`${AUTH_ENDPOINT}?action=login`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: username.trim(), password, remember }),
+    });
+    const data = await parseJson(res);
+    if (res.ok && data.ok && data.user) {
+      return { success: true, user: data.user as AuthUser };
+    }
+    return {
+      success: false,
+      message: data.message || 'Tên đăng nhập hoặc mật khẩu không chính xác',
+    };
+  } catch {
+    return { success: false, message: 'Không kết nối được máy chủ. Vui lòng kiểm tra mạng và thử lại.' };
   }
-
-  return { success: true, user };
 }
 
-export function logout(): void {
+export async function logout(): Promise<void> {
+  clearLegacyStorage();
   try {
-    localStorage.removeItem(AUTH_USER_KEY);
+    await fetch(`${AUTH_ENDPOINT}?action=logout`, { method: 'POST', credentials: 'same-origin' });
   } catch (e) {
     console.warn('Logout error:', e);
-  }
-}
-
-export function updateAdminPassword(oldPass: string, newPass: string): { success: boolean; message: string } {
-  const currentPass = getStoredAdminPassword();
-  if (oldPass !== currentPass) {
-    return { success: false, message: 'Mật khẩu hiện tại không đúng' };
-  }
-  if (!newPass || newPass.trim().length < 4) {
-    return { success: false, message: 'Mật khẩu mới phải có ít nhất 4 ký tự' };
-  }
-
-  try {
-    localStorage.setItem(ADMIN_PASSWORD_KEY, newPass.trim());
-    return { success: true, message: 'Đổi mật khẩu thành công' };
-  } catch {
-    return { success: false, message: 'Lỗi khi lưu mật khẩu mới' };
-  }
-}
-
-export function resetAdminPasswordToDefault(): void {
-  try {
-    localStorage.removeItem(ADMIN_PASSWORD_KEY);
-  } catch (e) {
-    console.warn('Reset password error:', e);
   }
 }

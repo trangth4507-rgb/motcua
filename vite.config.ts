@@ -1,7 +1,7 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import { defineConfig, Plugin } from 'vite';
+import { defineConfig, loadEnv, Plugin } from 'vite';
 
 function apiProxyPlugin(): Plugin {
   return {
@@ -41,9 +41,32 @@ function apiProxyPlugin(): Plugin {
   };
 }
 
-export default defineConfig(() => {
+// Chạy hàm Vercel /api/auth ngay trong máy chủ dev (`npm run dev`)
+function authApiPlugin(): Plugin {
   return {
-    plugins: [react(), tailwindcss(), apiProxyPlugin()],
+    name: 'auth-api-plugin',
+    configureServer(server) {
+      server.middlewares.use('/api/auth', async (req, res) => {
+        try {
+          const mod = await server.ssrLoadModule('/api/auth.ts');
+          await mod.default(req, res);
+        } catch (err: any) {
+          res.statusCode = 500;
+          res.end(err?.message || 'Auth error');
+        }
+      });
+    },
+  };
+}
+
+export default defineConfig(({ mode }) => {
+  // Nạp ADMIN_PASSWORD... từ file .env.local cho môi trường dev
+  const env = loadEnv(mode, process.cwd(), '');
+  for (const key of ['ADMIN_USERNAME', 'ADMIN_PASSWORD', 'AUTH_SECRET']) {
+    if (env[key] && !process.env[key]) process.env[key] = env[key];
+  }
+  return {
+    plugins: [react(), tailwindcss(), apiProxyPlugin(), authApiPlugin()],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

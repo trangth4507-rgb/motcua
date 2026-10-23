@@ -1,63 +1,42 @@
-import React, { useState } from 'react';
-import { KeyRound, X, Check, AlertCircle, RotateCcw } from 'lucide-react';
-import { updateAdminPassword, resetAdminPasswordToDefault, DEFAULT_ADMIN_PASSWORD } from '../lib/auth';
+import React from 'react';
+import { KeyRound, X, ExternalLink, Info } from 'lucide-react';
+import { VERCEL_ENV_SETTINGS_URL } from '../lib/auth';
 
 interface ChangePasswordModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
+/**
+ * Mật khẩu Admin được lưu trong biến môi trường ADMIN_PASSWORD trên Vercel,
+ * nên không thể đổi trực tiếp từ trình duyệt. Hộp thoại này hướng dẫn cách đổi.
+ */
 export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen, onClose }) => {
-  const [oldPassword, setOldPassword] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
-
   if (!isOpen) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    setSuccess(null);
-
-    if (newPassword !== confirmPassword) {
-      setError('Mật khẩu xác nhận không khớp');
-      return;
-    }
-
-    const res = updateAdminPassword(oldPassword, newPassword);
-    if (res.success) {
-      setSuccess(res.message);
-      setOldPassword('');
-      setNewPassword('');
-      setConfirmPassword('');
-      setTimeout(() => {
-        onClose();
-        setSuccess(null);
-      }, 1500);
-    } else {
-      setError(res.message);
-    }
-  };
-
-  const handleReset = () => {
-    if (window.confirm(`Bạn có chắc muốn đặt lại mật khẩu Admin về mặc định (${DEFAULT_ADMIN_PASSWORD}) không?`)) {
-      resetAdminPasswordToDefault();
-      setSuccess(`Đã đặt lại mật khẩu về mặc định: ${DEFAULT_ADMIN_PASSWORD}`);
-      setOldPassword('');
-      setNewPassword('');
-      setConfirmPassword('');
-      setTimeout(() => {
-        onClose();
-        setSuccess(null);
-      }, 1500);
-    }
-  };
+  const steps = [
+    <>
+      Mở trang <strong>Environment Variables</strong> của dự án trên Vercel (nút bên dưới).
+    </>,
+    <>
+      Tìm biến <code className="px-1 py-0.5 rounded bg-slate-100 font-mono text-[11px]">ADMIN_PASSWORD</code>, bấm{' '}
+      <strong>Edit</strong> và nhập mật khẩu mới rồi <strong>Save</strong>.
+    </>,
+    <>
+      Vào tab <strong>Deployments</strong>, chọn bản mới nhất → <strong>Redeploy</strong> để áp dụng.
+    </>,
+    <>Mọi thiết bị đang đăng nhập sẽ tự đăng xuất; đăng nhập lại bằng mật khẩu mới.</>,
+  ];
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
-      <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden">
+    <div
+      className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
+      onClick={onClose}
+    >
+      <div
+        className="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Header */}
         <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -67,97 +46,52 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen
           <button
             onClick={onClose}
             className="p-1 hover:bg-slate-800 rounded-lg text-slate-300 transition-colors cursor-pointer"
+            title="Đóng"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Content */}
-        <form onSubmit={handleSubmit} className="p-6 space-y-4 text-xs sm:text-sm">
-          {error && (
-            <div className="p-3 bg-red-50 border border-red-200 text-red-800 rounded-lg flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
-              <span>{error}</span>
-            </div>
-          )}
-
-          {success && (
-            <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg flex items-center gap-2">
-              <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-              <span>{success}</span>
-            </div>
-          )}
-
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
-              Mật khẩu hiện tại
-            </label>
-            <input
-              type="password"
-              required
-              value={oldPassword}
-              onChange={(e) => setOldPassword(e.target.value)}
-              placeholder="Nhập mật khẩu hiện tại..."
-              className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono"
-            />
+        <div className="p-6 space-y-4 text-xs sm:text-sm text-slate-700">
+          <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-lg flex items-start gap-2">
+            <Info className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+            <span>
+              Mật khẩu Admin được lưu an toàn trên máy chủ Vercel, không nằm trong trình duyệt, nên được đổi
+              trong trang quản lý dự án.
+            </span>
           </div>
 
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
-              Mật khẩu mới
-            </label>
-            <input
-              type="password"
-              required
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              placeholder="Nhập mật khẩu mới..."
-              className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono"
-            />
-          </div>
+          <ol className="space-y-2.5">
+            {steps.map((step, i) => (
+              <li key={i} className="flex items-start gap-2.5">
+                <span className="w-5 h-5 rounded-full bg-slate-900 text-white text-[11px] font-bold flex items-center justify-center shrink-0">
+                  {i + 1}
+                </span>
+                <span className="leading-relaxed">{step}</span>
+              </li>
+            ))}
+          </ol>
 
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
-              Xác nhận mật khẩu mới
-            </label>
-            <input
-              type="password"
-              required
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              placeholder="Nhập lại mật khẩu mới..."
-              className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono"
-            />
-          </div>
-
-          <div className="pt-2 flex items-center justify-between gap-2 border-t border-slate-100">
+          <div className="pt-3 flex items-center justify-end gap-2 border-t border-slate-100">
             <button
               type="button"
-              onClick={handleReset}
-              className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-red-700 transition-colors cursor-pointer py-1.5"
-              title="Đặt lại mật khẩu Admin về giá trị gốc: dcmvss"
+              onClick={onClose}
+              className="px-3.5 py-2 text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
             >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span>Về mặc định (dcmvss)</span>
+              Đóng
             </button>
-
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={onClose}
-                className="px-3.5 py-2 text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
-              >
-                Hủy
-              </button>
-              <button
-                type="submit"
-                className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors cursor-pointer shadow-xs"
-              >
-                Lưu mật khẩu
-              </button>
-            </div>
+            <a
+              href={VERCEL_ENV_SETTINGS_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors shadow-xs"
+            >
+              <span>Mở cài đặt Vercel</span>
+              <ExternalLink className="w-3.5 h-3.5" />
+            </a>
           </div>
-        </form>
+        </div>
       </div>
     </div>
   );
