@@ -31,11 +31,23 @@ import {
   Activity,
   RotateCcw,
   Trash2,
+  LogOut,
+  KeyRound,
+  Shield,
+  ChevronDown,
+  Lock,
 } from 'lucide-react';
 import { cn } from './lib/utils';
 import { parseDate, calculateTimeRemaining, isValidCompletedTimestamp } from './lib/dateUtils';
+import { LoginScreen } from './components/LoginScreen';
+import { ChangePasswordModal } from './components/ChangePasswordModal';
+import { getCurrentUser, logout, AuthUser } from './lib/auth';
 
 export default function App() {
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => getCurrentUser());
+  const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
+  const [showUserMenu, setShowUserMenu] = useState(false);
+
   const [webAppUrl, setWebAppUrl] = useState(() => {
     return localStorage.getItem('deadline_webapp_url') || WEB_APP_URL_DEFAULT;
   });
@@ -298,6 +310,25 @@ export default function App() {
     };
   }, [records]);
 
+  const handleLogout = () => {
+    logout();
+    setCurrentUser(null);
+    setShowUserMenu(false);
+  };
+
+  if (!currentUser) {
+    return (
+      <LoginScreen
+        onLoginSuccess={(user) => {
+          setCurrentUser(user);
+          if (webAppUrl) {
+            loadData(webAppUrl);
+          }
+        }}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-800">
       {/* Header */}
@@ -381,6 +412,69 @@ export default function App() {
                 </>
               )}
             </button>
+
+            {/* Admin User Profile Dropdown */}
+            <div className="relative">
+              <button
+                onClick={() => setShowUserMenu(!showUserMenu)}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-50 hover:bg-slate-100 border border-slate-300 text-xs font-semibold text-slate-800 transition-colors shadow-2xs cursor-pointer"
+                title="Tài khoản quản trị"
+              >
+                <div className="w-5 h-5 rounded-full bg-emerald-700 text-white flex items-center justify-center font-bold text-[10px]">
+                  A
+                </div>
+                <span className="font-bold text-slate-900">Admin</span>
+                <span className="hidden md:inline-block px-1.5 py-0.2 rounded text-[10px] font-medium bg-emerald-100 text-emerald-800">
+                  Quản trị
+                </span>
+                <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
+              </button>
+
+              {showUserMenu && (
+                <>
+                  <div
+                    className="fixed inset-0 z-30"
+                    onClick={() => setShowUserMenu(false)}
+                  />
+                  <div className="absolute right-0 mt-2 w-56 rounded-xl bg-white shadow-xl border border-slate-200 py-1 z-40 animate-in fade-in zoom-in-95 duration-100 text-xs">
+                    <div className="px-3.5 py-2.5 border-b border-slate-100 bg-slate-50/70">
+                      <div className="flex items-center gap-2">
+                        <div className="w-7 h-7 rounded-full bg-emerald-700 text-white flex items-center justify-center font-bold text-xs">
+                          A
+                        </div>
+                        <div>
+                          <p className="font-bold text-slate-900 leading-tight">Admin</p>
+                          <p className="text-[11px] text-emerald-700 font-medium">Quản trị viên Một cửa</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="py-1">
+                      <button
+                        onClick={() => {
+                          setShowUserMenu(false);
+                          setShowChangePasswordModal(true);
+                        }}
+                        className="w-full flex items-center gap-2 px-3.5 py-2 text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer text-left"
+                      >
+                        <KeyRound className="w-4 h-4 text-slate-500" />
+                        <span>Đổi mật khẩu</span>
+                      </button>
+                    </div>
+
+                    <div className="border-t border-slate-100 py-1">
+                      <button
+                        onClick={handleLogout}
+                        className="w-full flex items-center gap-2 px-3.5 py-2 text-red-600 hover:bg-red-50 transition-colors cursor-pointer text-left font-medium"
+                      >
+                        <LogOut className="w-4 h-4 text-red-500" />
+                        <span>Đăng xuất</span>
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
         </div>
       </header>
@@ -799,6 +893,12 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* Change Password Modal */}
+      <ChangePasswordModal
+        isOpen={showChangePasswordModal}
+        onClose={() => setShowChangePasswordModal(false)}
+      />
     </div>
   );
 }
