@@ -41,10 +41,11 @@ import { cn } from './lib/utils';
 import { parseDate, calculateTimeRemaining, isValidCompletedTimestamp } from './lib/dateUtils';
 import { LoginScreen } from './components/LoginScreen';
 import { ChangePasswordModal } from './components/ChangePasswordModal';
-import { getCurrentUser, logout, AuthUser } from './lib/auth';
+import { fetchSession, logout, AuthUser } from './lib/auth';
 
 export default function App() {
-  const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => getCurrentUser());
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
   const [showChangePasswordModal, setShowChangePasswordModal] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
 
@@ -310,11 +311,35 @@ export default function App() {
     };
   }, [records]);
 
-  const handleLogout = () => {
-    logout();
-    setCurrentUser(null);
+  // Kiểm tra phiên đăng nhập với máy chủ khi mở trang
+  useEffect(() => {
+    let cancelled = false;
+    fetchSession().then((user) => {
+      if (cancelled) return;
+      setCurrentUser(user);
+      setAuthChecked(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleLogout = async () => {
     setShowUserMenu(false);
+    await logout();
+    setCurrentUser(null);
   };
+
+  if (!authChecked) {
+    return (
+      <div className="min-h-screen bg-slate-100 flex items-center justify-center font-sans">
+        <div className="flex items-center gap-2.5 text-sm text-slate-600 font-medium">
+          <div className="w-4 h-4 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin" />
+          <span>Đang kiểm tra phiên đăng nhập...</span>
+        </div>
+      </div>
+    );
+  }
 
   if (!currentUser) {
     return (
@@ -421,9 +446,9 @@ export default function App() {
                 title="Tài khoản quản trị"
               >
                 <div className="w-5 h-5 rounded-full bg-emerald-700 text-white flex items-center justify-center font-bold text-[10px]">
-                  A
+                  {currentUser.username.charAt(0).toUpperCase()}
                 </div>
-                <span className="font-bold text-slate-900">Admin</span>
+                <span className="font-bold text-slate-900">{currentUser.username}</span>
                 <span className="hidden md:inline-block px-1.5 py-0.2 rounded text-[10px] font-medium bg-emerald-100 text-emerald-800">
                   Quản trị
                 </span>
@@ -440,10 +465,10 @@ export default function App() {
                     <div className="px-3.5 py-2.5 border-b border-slate-100 bg-slate-50/70">
                       <div className="flex items-center gap-2">
                         <div className="w-7 h-7 rounded-full bg-emerald-700 text-white flex items-center justify-center font-bold text-xs">
-                          A
+                          {currentUser.username.charAt(0).toUpperCase()}
                         </div>
                         <div>
-                          <p className="font-bold text-slate-900 leading-tight">Admin</p>
+                          <p className="font-bold text-slate-900 leading-tight">{currentUser.username}</p>
                           <p className="text-[11px] text-emerald-700 font-medium">Quản trị viên Một cửa</p>
                         </div>
                       </div>
